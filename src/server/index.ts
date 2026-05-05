@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import staticPlugin from '@fastify/static';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import open from 'open';
 import { AgentHistoryService } from '../readers/index.js';
@@ -14,6 +15,10 @@ const WEB_DIST = path.join(__dirname, 'web');
 const service = new AgentHistoryService();
 
 export async function startWebServer(port = 3847): Promise<void> {
+  if (!fs.existsSync(WEB_DIST)) {
+    throw new Error(`Web UI not found at ${WEB_DIST}. The package may be corrupted — try clearing the npx cache: npx clear-npx-cache`);
+  }
+
   const app = Fastify({ logger: false });
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }

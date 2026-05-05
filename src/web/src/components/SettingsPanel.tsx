@@ -18,30 +18,12 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
       <section>
         <SectionTitle>View</SectionTitle>
 
-        {/* Accent */}
-        <Row label="Accent color">
-          <div style={{ display: 'flex', gap: 6 }}>
-            {(Object.keys(ACCENT_PRESETS) as AccentName[]).map((name) => (
-              <button
-                key={name}
-                onClick={() => onUpdateView('accent', name)}
-                title={name}
-                style={{
-                  width: 18,
-                  height: 18,
-                  borderRadius: 999,
-                  backgroundColor: ACCENT_PRESETS[name].color,
-                  border: `2px solid ${viewSettings.accent === name ? 'var(--text-primary)' : 'transparent'}`,
-                  outline: viewSettings.accent === name ? `2px solid ${ACCENT_PRESETS[name].color}` : 'none',
-                  outlineOffset: 1,
-                  cursor: 'pointer',
-                  padding: 0,
-                  transition: 'border 120ms, outline 120ms',
-                }}
-              />
-            ))}
-          </div>
-        </Row>
+        <Toggle
+          label="Show tool calls"
+          description="Display tool execution in conversation view"
+          value={settings.display.showToolCalls}
+          onChange={(v) => onUpdate({ display: { ...settings.display, showToolCalls: v } })}
+        />
 
         {/* Transcript style */}
         <SelectRow
@@ -99,26 +81,19 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
         </Row>
       </section>
 
-      {/* Display */}
-      <section>
-        <SectionTitle>Display</SectionTitle>
-        <Toggle
-          label="Show tool calls"
-          description="Display tool execution in conversation view"
-          value={settings.display.showToolCalls}
-          onChange={(v) => onUpdate({ display: { ...settings.display, showToolCalls: v } })}
-        />
-      </section>
-
       {/* MCP Output */}
       <section>
         <SectionTitle>MCP Output</SectionTitle>
         <p style={{ margin: '0 0 12px', fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
-          Controls what gets sent when an agent calls{' '}
+          Defaults applied when an agent calls{' '}
           <code style={{ backgroundColor: 'var(--bg-inset)', padding: '1px 5px', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5 }}>
             get_agent_history
           </code>{' '}
-          via MCP.
+          without arguments. Persisted to{' '}
+          <code style={{ backgroundColor: 'var(--bg-inset)', padding: '1px 5px', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5 }}>
+            ~/.agent-history/config.json
+          </code>{' '}
+          and read by the MCP process spawned via the config below.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <Toggle
@@ -153,6 +128,34 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
   }
 }`}
         </pre>
+      </section>
+
+      {/* Tone */}
+      <section>
+        <SectionTitle>Tone</SectionTitle>
+        <Row label="Accent color">
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(Object.keys(ACCENT_PRESETS) as AccentName[]).map((name) => (
+              <button
+                key={name}
+                onClick={() => onUpdateView('accent', name)}
+                title={name}
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: 999,
+                  backgroundColor: ACCENT_PRESETS[name].color,
+                  border: `2px solid ${viewSettings.accent === name ? 'var(--text-primary)' : 'transparent'}`,
+                  outline: viewSettings.accent === name ? `2px solid ${ACCENT_PRESETS[name].color}` : 'none',
+                  outlineOffset: 1,
+                  cursor: 'pointer',
+                  padding: 0,
+                  transition: 'border 120ms, outline 120ms',
+                }}
+              />
+            ))}
+          </div>
+        </Row>
       </section>
     </div>
   );
@@ -203,6 +206,33 @@ function SelectRow({ label, value, options, onChange }: { label: string; value: 
   );
 }
 
+function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 0' }}>
+      <p style={{ margin: 0, fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{label}</p>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value))))}
+        style={{
+          width: 72,
+          textAlign: 'center',
+          fontSize: 13,
+          padding: '4px 8px',
+          borderRadius: 7,
+          backgroundColor: 'var(--bg-inset)',
+          border: '1px solid var(--border-main)',
+          color: 'var(--text-primary)',
+          fontFamily: 'inherit',
+          outline: 'none',
+        }}
+      />
+    </div>
+  );
+}
+
 function Toggle({ label, description, value, onChange }: { label: string; description: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, padding: '8px 0' }}>
@@ -242,29 +272,3 @@ function Toggle({ label, description, value, onChange }: { label: string; descri
   );
 }
 
-function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 0' }}>
-      <p style={{ margin: 0, fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{label}</p>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value))))}
-        style={{
-          width: 72,
-          textAlign: 'center',
-          fontSize: 13,
-          padding: '4px 8px',
-          borderRadius: 7,
-          backgroundColor: 'var(--bg-inset)',
-          border: '1px solid var(--border-main)',
-          color: 'var(--text-primary)',
-          fontFamily: 'inherit',
-          outline: 'none',
-        }}
-      />
-    </div>
-  );
-}

@@ -200,7 +200,8 @@ function extractAssistantParts(
     } else if (it['type'] === 'toolCall' || it['type'] === 'tool_use') {
       const name = typeof it['name'] === 'string' ? it['name'] : '?';
       const input = (it['input'] as Record<string, unknown> | undefined) ??
-                    (it['parameters'] as Record<string, unknown> | undefined) ?? {};
+                    (it['parameters'] as Record<string, unknown> | undefined) ??
+                    (it['arguments'] as Record<string, unknown> | undefined) ?? {};
       toolUses.set(name, (toolUses.get(name) ?? 0) + 1);
       items.push({ kind: 'tool', tool: { name, input } });
     }

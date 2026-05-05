@@ -156,7 +156,61 @@ function ToolCallItem({ call, mode = 'collapse' }: { call: ToolCall; mode?: Tool
   return <ToolCallCollapse call={call} />;
 }
 
+function ToolCallGroup({ calls, mode }: { calls: ToolCall[]; mode: ToolStyle }) {
+  const [open, setOpen] = useState(false);
+  const count = calls.length;
+  return (
+    <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border-main)' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-card-hover)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--bg-card)')}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', textAlign: 'left', background: 'var(--bg-card)', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}
+      >
+        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 500, width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-inset)', color: 'var(--text-secondary)', flexShrink: 0 }}>
+          ⚙
+        </span>
+        <span className="font-mono" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)' }}>
+          {count} tool call{count !== 1 ? 's' : ''}
+        </span>
+        <svg
+          width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+          style={{ color: 'var(--text-tertiary)', marginLeft: 'auto', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 180ms' }}
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="fade-in" style={{ padding: '8px', background: 'var(--bg-inset)', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {calls.map((call, i) => <ToolCallItem key={i} call={call} mode={mode} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Assistant content ── */
+
+type ItemGroup =
+  | { kind: 'text'; text: string }
+  | { kind: 'tools'; calls: ToolCall[] };
+
+function groupItems(items: AssistantItem[]): ItemGroup[] {
+  const groups: ItemGroup[] = [];
+  for (const item of items) {
+    if (item.kind === 'text') {
+      groups.push({ kind: 'text', text: item.text });
+    } else {
+      const last = groups[groups.length - 1];
+      if (last?.kind === 'tools') {
+        last.calls.push(item.tool);
+      } else {
+        groups.push({ kind: 'tools', calls: [item.tool] });
+      }
+    }
+  }
+  return groups;
+}
 
 function AssistantItems({
   items, toolStyle, showToolCalls, prose, compact,
@@ -167,15 +221,16 @@ function AssistantItems({
   prose?: boolean;
   compact?: boolean;
 }) {
+  const groups = groupItems(items);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10 }}>
-      {items.map((item, i) =>
-        item.kind === 'text' ? (
+      {groups.map((g, i) =>
+        g.kind === 'text' ? (
           <p key={i} style={{ margin: 0, fontSize: prose ? 14.5 : 13.5, lineHeight: prose ? 1.7 : 1.6, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {item.text}
+            {g.text}
           </p>
         ) : showToolCalls ? (
-          <ToolCallItem key={i} call={item.tool} mode={toolStyle} />
+          <ToolCallGroup key={i} calls={g.calls} mode={toolStyle} />
         ) : null,
       )}
     </div>
@@ -338,7 +393,9 @@ function TranscriptChat({ session, toolStyle, showToolCalls, density }: { sessio
                     turn {i + 1}
                   </span>
                 </div>
-                <AssistantItems items={turn.items ?? []} toolStyle={toolStyle} showToolCalls={showToolCalls} />
+                <div style={{ padding: '10px 14px', borderRadius: '4px 14px 14px 14px', backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-main)' }}>
+                  <AssistantItems items={turn.items ?? []} toolStyle={toolStyle} showToolCalls={showToolCalls} />
+                </div>
               </div>
             </div>
           )}

@@ -4,7 +4,6 @@ import { CursorReader } from './cursor.js';
 import { OpenClawReader } from './openclaw.js';
 import { CodexReader } from './codex.js';
 import { HermesReader } from './hermes.js';
-import { AntigravityReader } from './antigravity.js';
 
 export type { AgentSession, AgentTurn, AgentSource, IReader, ReaderOptions } from './types.js';
 
@@ -18,7 +17,6 @@ export class AgentHistoryService {
       new OpenClawReader(),
       new CodexReader(),
       new HermesReader(),
-      new AntigravityReader(),
     ];
   }
 

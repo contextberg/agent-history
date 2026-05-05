@@ -8,7 +8,6 @@ const SOURCES: { value: AgentSource; label: string }[] = [
   { value: 'openclaw', label: 'OpenClaw' },
   { value: 'codex', label: 'Codex' },
   { value: 'hermes', label: 'Hermes' },
-  { value: 'antigravity', label: 'Antigravity' },
 ];
 
 interface Props {

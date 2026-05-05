@@ -6,12 +6,13 @@ import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } f
 import { truncate, isWithinDate, selectTurns } from './utils.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
+const SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions');
 
 export class CodexReader implements IReader {
   readonly source = 'codex' as const;
 
   async isInstalled(): Promise<boolean> {
-    return exists(path.join(os.homedir(), '.codex', 'sessions'));
+    return exists(SESSIONS_ROOT);
   }
 
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
@@ -19,13 +20,11 @@ export class CodexReader implements IReader {
     const maxTurns = options.maxTurnsPerSession ?? DEFAULTS.maxTurns;
     const maxChars = options.maxCharsPerField ?? DEFAULTS.maxChars;
 
-    const sessionsRoot = path.join(os.homedir(), '.codex', 'sessions');
-    if (!await exists(sessionsRoot)) return [];
+    if (!await exists(SESSIONS_ROOT)) return [];
 
     const allFiles: { fp: string; mtime: Date }[] = [];
-
     try {
-      await collectJsonlFiles(sessionsRoot, allFiles);
+      await collectJsonlFiles(SESSIONS_ROOT, allFiles);
     } catch {
       return [];
     }
@@ -72,11 +71,13 @@ async function parseSession(
   maxTurns: number,
   maxChars: number,
 ): Promise<AgentSession | null> {
-  const turns: AgentTurn[] = [];
+  let project = 'codex';
   let startedAt: Date | null = null;
+
   let pendingUserMessage: string | null = null;
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
+  const turns: AgentTurn[] = [];
 
   function flushTurn(): void {
     if (!pendingUserMessage || pendingItems.length === 0) return;
@@ -112,41 +113,67 @@ async function parseSession(
       try { root = JSON.parse(line); } catch { continue; }
 
       const type = root['type'] as string | undefined;
-      const timestamp = parseTimestamp(root['timestamp']);
+      const payload = root['payload'] as Record<string, unknown> | undefined;
 
-      if (type === 'thread.started') {
-        if (timestamp && !startedAt) startedAt = timestamp;
-        continue;
-      }
-
-      if (type === 'turn.started') {
-        flushTurn();
-        // input can be a string, array, or object with content
-        const input = root['input'];
-        const userText = extractUserText(input);
-        if (userText) {
-          pendingUserMessage = truncate(userText, maxChars);
-          if (!startedAt) startedAt = timestamp ?? new Date();
+      // Project name and start time from session metadata
+      if (type === 'session_meta' && payload) {
+        const cwd = payload['cwd'] as string | undefined;
+        if (cwd) project = path.basename(cwd.replace(/[/\\]+$/, '')) || project;
+        const ts = payload['timestamp'] as string | undefined;
+        if (ts) {
+          const d = new Date(ts);
+          if (!isNaN(d.getTime())) startedAt = d;
         }
         continue;
       }
 
-      if (type === 'item.completed') {
-        const item = root['item'] as Record<string, unknown> | undefined;
-        if (!item) continue;
-        const itemType = item['type'] as string | undefined;
+      if (type !== 'response_item' || !payload) continue;
 
-        if (itemType === 'agent_message' || itemType === 'message') {
-          // Try various field names for text content
-          const text = extractItemText(item);
-          if (text) pendingItems.push({ kind: 'text', text });
-        } else if (isToolType(itemType)) {
-          const name = (item['name'] as string | undefined) ?? itemType ?? '?';
-          const input = (item['input'] as Record<string, unknown> | undefined) ??
-                        (item['arguments'] as Record<string, unknown> | undefined) ?? {};
-          pendingTools.set(name, (pendingTools.get(name) ?? 0) + 1);
-          pendingItems.push({ kind: 'tool', tool: { name, input } });
+      const role = payload['role'] as string | undefined;
+      const itemType = payload['type'] as string | undefined;
+
+      // User message — skip system/environment injections
+      if (role === 'user') {
+        const contentArr = payload['content'] as Array<Record<string, unknown>> | undefined;
+        if (!Array.isArray(contentArr)) continue;
+        for (const c of contentArr) {
+          if (c['type'] === 'input_text' && typeof c['text'] === 'string') {
+            const text = (c['text'] as string).trim();
+            if (text && !text.startsWith('<environment_context>')) {
+              flushTurn();
+              pendingUserMessage = truncate(text, maxChars);
+              if (!startedAt) startedAt = new Date();
+            }
+          }
         }
+        continue;
+      }
+
+      // Assistant text response
+      if (role === 'assistant' && pendingUserMessage !== null) {
+        const contentArr = payload['content'] as Array<Record<string, unknown>> | undefined;
+        if (!Array.isArray(contentArr)) continue;
+        for (const c of contentArr) {
+          if (c['type'] === 'output_text' && typeof c['text'] === 'string') {
+            const text = (c['text'] as string).trim();
+            if (text) pendingItems.push({ kind: 'text', text: truncate(text, maxChars) });
+          }
+        }
+        continue;
+      }
+
+      // Tool call (function_call)
+      if (itemType === 'function_call' && pendingUserMessage !== null) {
+        const name = (payload['name'] as string | undefined) ?? '?';
+        const argsRaw = payload['arguments'];
+        let input: Record<string, unknown> = {};
+        if (typeof argsRaw === 'string') {
+          try { input = JSON.parse(argsRaw) as Record<string, unknown>; } catch { /* use empty */ }
+        } else if (argsRaw && typeof argsRaw === 'object') {
+          input = argsRaw as Record<string, unknown>;
+        }
+        pendingTools.set(name, (pendingTools.get(name) ?? 0) + 1);
+        pendingItems.push({ kind: 'tool', tool: { name, input } });
       }
     }
 
@@ -161,73 +188,10 @@ async function parseSession(
   return {
     id: randomUUID(),
     source: 'codex',
-    project: inferProject(filePath),
+    project,
     startedAt: startedAt ?? stat?.mtime ?? new Date(),
     turns: selectTurns(turns, maxTurns),
   };
-}
-
-function extractUserText(input: unknown): string {
-  if (typeof input === 'string') return input;
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      if (!item || typeof item !== 'object') continue;
-      const it = item as Record<string, unknown>;
-      if (it['role'] === 'user') {
-        const c = it['content'];
-        if (typeof c === 'string') return c;
-        if (Array.isArray(c)) {
-          for (const part of c) {
-            if (part && typeof part === 'object') {
-              const p = part as Record<string, unknown>;
-              if ((p['type'] === 'input_text' || p['type'] === 'text') && typeof p['text'] === 'string') return p['text'];
-            }
-          }
-        }
-      }
-    }
-  }
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>;
-    if (typeof obj['text'] === 'string') return obj['text'];
-    if (typeof obj['content'] === 'string') return obj['content'];
-  }
-  return '';
-}
-
-function extractItemText(item: Record<string, unknown>): string {
-  if (typeof item['text'] === 'string') return item['text'];
-  const content = item['content'];
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const part of content) {
-      if (!part || typeof part !== 'object') continue;
-      const p = part as Record<string, unknown>;
-      if ((p['type'] === 'output_text' || p['type'] === 'text') && typeof p['text'] === 'string') {
-        parts.push(p['text']);
-      }
-    }
-    if (parts.length > 0) return parts.join(' ');
-  }
-  return '';
-}
-
-function isToolType(t: string | undefined): boolean {
-  if (!t) return false;
-  return t.includes('tool') || t.includes('function') || t.includes('command') || t.includes('mcp');
-}
-
-function inferProject(filePath: string): string {
-  // ~/.codex/sessions/YYYY/MM/DD/rollout-<name>.jsonl → use filename
-  const base = path.basename(filePath, '.jsonl');
-  return base.startsWith('rollout-') ? base.slice('rollout-'.length) : base;
-}
-
-function parseTimestamp(val: unknown): Date | null {
-  if (!val) return null;
-  const d = new Date(val as string);
-  return isNaN(d.getTime()) ? null : d;
 }
 
 async function exists(p: string): Promise<boolean> {

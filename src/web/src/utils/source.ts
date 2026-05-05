@@ -7,7 +7,6 @@ export function sourceLabel(source: AgentSource): string {
     openclaw: 'OpenClaw',
     codex: 'Codex',
     hermes: 'Hermes',
-    antigravity: 'Antigravity',
   };
   return labels[source];
 }
@@ -19,7 +18,6 @@ export function sourceShort(source: AgentSource): string {
     openclaw: 'OC',
     codex: 'CX',
     hermes: 'HR',
-    antigravity: 'AG',
   };
   return shorts[source];
 }
@@ -31,7 +29,6 @@ export function sourceHex(source: AgentSource): string {
     openclaw: '#8B5CF6',
     codex: '#10B981',
     hermes: '#EC4899',
-    antigravity: '#06B6D4',
   };
   return colors[source];
 }

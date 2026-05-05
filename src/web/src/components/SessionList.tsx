@@ -10,7 +10,7 @@ interface Props {
   query?: string;
 }
 
-const SOURCES: AgentSource[] = ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes', 'antigravity'];
+const SOURCES: AgentSource[] = ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes'];
 
 const INSTALL_HINTS: Record<AgentSource, string> = {
   'claude-code': 'Install at claude.ai/code',
@@ -18,7 +18,6 @@ const INSTALL_HINTS: Record<AgentSource, string> = {
   openclaw: 'Install at openclaw.dev',
   codex: 'Install at github.com/openai/codex',
   hermes: 'Install at github.com/NousResearch/hermes-agent',
-  antigravity: 'Install at gemini.google.com/antigravity',
 };
 
 function relTime(iso: string): string {

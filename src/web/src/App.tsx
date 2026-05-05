@@ -17,7 +17,18 @@ function searchSessions(sessions: AgentSession[], query: string): AgentSession[]
     (s) =>
       s.project.toLowerCase().includes(q) ||
       s.source.toLowerCase().includes(q) ||
-      s.turns.some((t) => t.userMessage.toLowerCase().includes(q)),
+      s.turns.some(
+        (t) =>
+          t.userMessage.toLowerCase().includes(q) ||
+          t.assistantSummary.toLowerCase().includes(q) ||
+          t.items.some(
+            (it) =>
+              (it.kind === 'text' && it.text.toLowerCase().includes(q)) ||
+              (it.kind === 'tool' &&
+                (it.tool.name.toLowerCase().includes(q) ||
+                  JSON.stringify(it.tool.input).toLowerCase().includes(q))),
+          ),
+      ),
   );
 }
 
