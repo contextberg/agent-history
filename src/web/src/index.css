@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+@layer base {
+  /* ===== LIGHT THEME (default) ===== */
+  :root,
+  .light {
+    --bg-app: #F0F1F5;
+    --bg-panel: #FFFFFF;
+    --bg-card: #FFFFFF;
+    --bg-card-hover: #E8EDF3;
+    --bg-card-selected: #DBEAFE;
+    --bg-user-bubble: #DBEAFE;
+    --bg-assistant-bubble: #F1F5F9;
+    --bg-badge: #E2E8F0;
+    --border-main: #CBD5E1;
+    --border-subtle: #D1D9E6;
+    --border-card-selected: #93C5FD;
+    --text-primary: #0F172A;
+    --text-secondary: #334155;
+    --text-tertiary: #64748B;
+    --text-user: #1E1B4B;
+    --text-assistant: #1E293B;
+    --shadow-panel: 0 1px 4px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0, 0, 0, 0.05);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06);
+    --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.1);
+    --glow-opacity: 0;
+    --scrollbar-thumb: #94A3B8;
+    --scrollbar-thumb-hover: #64748B;
+    --scrollbar-track: transparent;
+    --toggle-bg: #E2E8F0;
+    --toggle-border: #CBD5E1;
+    --toggle-icon: #475569;
+  }
+
+  /* ===== DARK THEME ===== */
+  .dark {
+    --bg-app: #07090F;
+    --bg-panel: #0D111A;
+    --bg-card: rgba(255, 255, 255, 0.02);
+    --bg-card-hover: rgba(255, 255, 255, 0.04);
+    --bg-card-selected: rgba(255, 255, 255, 0.06);
+    --bg-user-bubble: rgba(99, 102, 241, 0.12);
+    --bg-assistant-bubble: rgba(255, 255, 255, 0.02);
+    --bg-badge: rgba(255, 255, 255, 0.05);
+    --border-main: rgba(255, 255, 255, 0.06);
+    --border-subtle: rgba(255, 255, 255, 0.04);
+    --border-card-selected: rgba(255, 255, 255, 0.1);
+    --text-primary: #E2E8F0;
+    --text-secondary: #94A3B8;
+    --text-tertiary: #64748B;
+    --text-user: #C7D2FE;
+    --text-assistant: #CBD5E1;
+    --shadow-panel: 0 4px 24px rgba(0, 0, 0, 0.3);
+    --shadow-card: none;
+    --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.2);
+    --glow-opacity: 1;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+    --scrollbar-track: transparent;
+    --toggle-bg: rgba(255, 255, 255, 0.04);
+    --toggle-border: rgba(255, 255, 255, 0.08);
+    --toggle-icon: #94A3B8;
+  }
+
+  body {
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background-color: rgba(99, 102, 241, 0.2);
+  }
+}
+
+@layer utilities {
+  .font-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+
+  /* Theme toggle button */
+  .theme-toggle-btn {
+    background: var(--toggle-bg);
+    border-color: var(--toggle-border);
+    color: var(--toggle-icon);
+  }
+  .theme-toggle-btn:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--border-main);
+    color: var(--text-primary);
+  }
+}
