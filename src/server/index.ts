@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import open from 'open';
 import { AgentHistoryService } from '../readers/index.js';
 import type { AgentSource, ReaderOptions } from '../readers/index.js';
+import { loadConfig, saveConfig } from '../config.js';
+import type { AgentHistoryConfig } from '../config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.join(__dirname, 'web');
@@ -13,8 +15,10 @@ const service = new AgentHistoryService();
 
 export async function startWebServer(port = 3847): Promise<void> {
   const app = Fastify({ logger: false });
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }
+  });
 
-  // API routes
   app.get('/api/sessions', async (req) => {
     const query = req.query as Record<string, string>;
     const options: ReaderOptions = {
@@ -22,10 +26,7 @@ export async function startWebServer(port = 3847): Promise<void> {
       ...(query['maxSessions'] ? { maxSessions: Number(query['maxSessions']) } : {}),
     };
     const source = query['source'] as AgentSource | undefined;
-
-    return source
-      ? service.getSessionsBySource(source, options)
-      : service.getSessions(options);
+    return source ? service.getSessionsBySource(source, options) : service.getSessions(options);
   });
 
   app.get('/api/sessions/:id', async (req, reply) => {
@@ -36,20 +37,32 @@ export async function startWebServer(port = 3847): Promise<void> {
     return session;
   });
 
-  // 静的ファイル配信（React ビルド成果物）
-  await app.register(staticPlugin, {
-    root: WEB_DIST,
-    prefix: '/',
+  app.get('/api/status', async () => {
+    return service.getStatus();
   });
 
-  // SPA フォールバック
+  app.get('/api/settings', async () => {
+    return loadConfig();
+  });
+
+  app.post('/api/settings', async (req, reply) => {
+    const body = req.body as Partial<AgentHistoryConfig>;
+    const current = await loadConfig();
+    const updated: AgentHistoryConfig = {
+      display: { ...current.display, ...body.display },
+      mcp: { ...current.mcp, ...body.mcp },
+    };
+    await saveConfig(updated);
+    return updated;
+  });
+
+  await app.register(staticPlugin, { root: WEB_DIST, prefix: '/' });
+
   app.setNotFoundHandler((_req, reply) => {
     reply.sendFile('index.html');
   });
 
-  // ポート競合時は次のポートを試す
   const actualPort = await listenWithFallback(app, port);
-
   const url = `http://localhost:${actualPort}`;
   console.log(`agent-history running at ${url}`);
   await open(url);

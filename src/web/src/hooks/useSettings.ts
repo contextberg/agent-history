@@ -13,9 +13,7 @@ export interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
-  display: {
-    showToolCalls: true,
-  },
+  display: { showToolCalls: true },
   mcp: {
     includeToolCalls: true,
     maxSessions: 10,
@@ -24,31 +22,30 @@ const DEFAULTS: AppSettings = {
   },
 };
 
-const KEY = 'agent-history-settings';
-
-function load(): AppSettings {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return DEFAULTS;
-    return { ...DEFAULTS, ...JSON.parse(raw) };
-  } catch {
-    return DEFAULTS;
-  }
-}
-
 export function useSettings() {
-  const [settings, setSettings] = useState<AppSettings>(load);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULTS);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(settings));
-  }, [settings]);
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((data: AppSettings) => setSettings({ ...DEFAULTS, ...data }))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
 
-  function update(patch: Partial<AppSettings>) {
-    setSettings((prev) => ({
-      display: { ...prev.display, ...(patch.display ?? {}) },
-      mcp: { ...prev.mcp, ...(patch.mcp ?? {}) },
-    }));
+  async function update(patch: Partial<AppSettings>) {
+    const next: AppSettings = {
+      display: { ...settings.display, ...patch.display },
+      mcp: { ...settings.mcp, ...patch.mcp },
+    };
+    setSettings(next);
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {});
   }
 
-  return { settings, update };
+  return { settings, update, loading };
 }

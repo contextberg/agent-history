@@ -1,9 +1,14 @@
+import React from 'react';
 import type { AgentSource } from '../types';
+import { sourceHex } from '../utils/source';
 
 const SOURCES: { value: AgentSource; label: string }[] = [
   { value: 'claude-code', label: 'Claude Code' },
   { value: 'cursor', label: 'Cursor' },
   { value: 'openclaw', label: 'OpenClaw' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'hermes', label: 'Hermes' },
+  { value: 'antigravity', label: 'Antigravity' },
 ];
 
 interface Props {
@@ -13,16 +18,16 @@ interface Props {
 
 export function SourceFilter({ value, onChange }: Props) {
   return (
-    <div className="flex gap-2 flex-wrap relative z-10">
-      <FilterPill active={!value} onClick={() => onChange(undefined)} activeColor="indigo">
-        All Tools
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      <FilterPill active={!value} onClick={() => onChange(undefined)} hex={undefined}>
+        All
       </FilterPill>
       {SOURCES.map((s) => (
         <FilterPill
           key={s.value}
           active={value === s.value}
           onClick={() => onChange(s.value)}
-          activeColor={s.value === 'claude-code' ? 'orange' : s.value === 'cursor' ? 'blue' : 'emerald'}
+          hex={sourceHex(s.value)}
         >
           {s.label}
         </FilterPill>
@@ -34,37 +39,37 @@ export function SourceFilter({ value, onChange }: Props) {
 function FilterPill({
   active,
   onClick,
-  activeColor,
+  hex,
   children,
 }: {
   active: boolean;
   onClick: () => void;
-  activeColor: 'indigo' | 'orange' | 'blue' | 'emerald';
+  hex: string | undefined;
   children: React.ReactNode;
 }) {
-  const activeColors = {
-    indigo: { bg: 'rgba(99, 102, 241, 0.18)', border: 'rgba(99, 102, 241, 0.5)', color: '#4F46E5' },
-    orange: { bg: 'rgba(234, 88, 12, 0.15)', border: 'rgba(234, 88, 12, 0.45)', color: '#C2410C' },
-    blue:   { bg: 'rgba(37, 99, 235, 0.15)', border: 'rgba(37, 99, 235, 0.45)', color: '#1D4ED8' },
-    emerald:{ bg: 'rgba(5, 150, 105, 0.15)', border: 'rgba(5, 150, 105, 0.45)', color: '#047857' },
-  };
-
-  const c = activeColors[activeColor];
-
   return (
     <button
       onClick={onClick}
-      className="text-[11px] font-semibold tracking-wide px-3 py-1.5 rounded-full transition-all duration-300"
-      style={
-        active
-          ? { backgroundColor: c.bg, border: `1px solid ${c.border}`, color: c.color }
-          : {
-              backgroundColor: 'var(--bg-badge)',
-              border: '1px solid var(--border-subtle)',
-              color: 'var(--text-tertiary)',
-            }
-      }
+      className="focus-ring"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11,
+        fontWeight: 500,
+        padding: '3px 8px',
+        borderRadius: 999,
+        backgroundColor: active ? 'var(--bg-card-selected)' : 'transparent',
+        color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        border: `1px solid ${active ? 'var(--border-main)' : 'transparent'}`,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        transition: 'background 90ms, color 90ms',
+      }}
     >
+      {hex && (
+        <span style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: hex, flexShrink: 0 }} />
+      )}
       {children}
     </button>
   );

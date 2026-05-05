@@ -2,13 +2,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import type { AgentSession, AgentTurn, IReader, ReaderOptions } from './types.js';
+import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 
 export class OpenClawReader implements IReader {
   readonly source = 'openclaw' as const;
+
+  async isInstalled(): Promise<boolean> {
+    return exists(path.join(os.homedir(), '.openclaw', 'agents'));
+  }
 
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
     const maxSessions = options.maxSessions ?? DEFAULTS.maxSessions;
@@ -58,7 +62,7 @@ export class OpenClawReader implements IReader {
         if (sessions.length >= maxSessions) break;
       }
     } catch {
-      // 空を返す
+      // return empty on unreadable directories
     }
 
     return sessions
@@ -77,15 +81,29 @@ async function parseSession(
   let startedAt: Date | null = null;
   let projectName = 'openclaw';
   let pendingUserMessage: string | null = null;
-  const pendingTexts: string[] = [];
+  const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
 
   function flushTurn(): void {
-    if (!pendingUserMessage) return;
-    const summary = buildSummary(pendingTexts, pendingTools, maxChars);
-    if (summary) turns.push({ userMessage: pendingUserMessage, assistantSummary: summary, items: [{ kind: 'text', text: summary }] });
+    if (!pendingUserMessage || pendingItems.length === 0) return;
+    const textParts = pendingItems
+      .filter((i): i is { kind: 'text'; text: string } => i.kind === 'text')
+      .map((i) => i.text)
+      .join(' ');
+    let summary = '';
+    if (textParts) {
+      if (pendingTools.size > 0) {
+        const suffix = ' [' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ') + ']';
+        summary = truncate(textParts, Math.max(0, maxChars - suffix.length)) + suffix;
+      } else {
+        summary = truncate(textParts, maxChars);
+      }
+    } else if (pendingTools.size > 0) {
+      summary = '→ ' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
+    }
+    turns.push({ userMessage: pendingUserMessage, assistantSummary: summary, items: [...pendingItems] });
     pendingUserMessage = null;
-    pendingTexts.length = 0;
+    pendingItems.length = 0;
     pendingTools.clear();
   }
 
@@ -130,7 +148,11 @@ async function parseSession(
         }
       } else if (role === 'assistant' && pendingUserMessage !== null) {
         const contentVal = msg?.['content'];
-        accumulateAssistant(contentVal, pendingTexts, pendingTools);
+        const { items, toolUses } = extractAssistantParts(contentVal);
+        pendingItems.push(...items);
+        for (const [name, count] of toolUses) {
+          pendingTools.set(name, (pendingTools.get(name) ?? 0) + count);
+        }
       }
     }
 
@@ -161,41 +183,30 @@ function extractFirstText(content: unknown): string {
   return '';
 }
 
-function accumulateAssistant(
+function extractAssistantParts(
   content: unknown,
-  textParts: string[],
-  toolUses: Map<string, number>,
-): void {
-  if (!Array.isArray(content)) return;
+): { items: AssistantItem[]; toolUses: Map<string, number> } {
+  const items: AssistantItem[] = [];
+  const toolUses = new Map<string, number>();
+
+  if (!Array.isArray(content)) return { items, toolUses };
+
   for (const item of content) {
     if (!item || typeof item !== 'object') continue;
     const it = item as Record<string, unknown>;
-    if (it['type'] === 'text' && typeof it['text'] === 'string' && it['text'].trim()) {
-      textParts.push(it['text']);
-    } else if (it['type'] === 'toolCall') {
-      const name = typeof it['name'] === 'string' ? it['name'] : '?';
-      toolUses.set(name, (toolUses.get(name) ?? 0) + 1);
-    }
-  }
-}
 
-function buildSummary(
-  textParts: string[],
-  toolUses: Map<string, number>,
-  maxChars: number,
-): string {
-  if (textParts.length > 0) {
-    const joined = textParts.join(' ');
-    if (toolUses.size > 0) {
-      const suffix = ' [' + [...toolUses.entries()].map(([k, v]) => `${k}×${v}`).join(', ') + ']';
-      return truncate(joined, Math.max(0, maxChars - suffix.length)) + suffix;
+    if (it['type'] === 'text' && typeof it['text'] === 'string' && it['text'].trim()) {
+      items.push({ kind: 'text', text: it['text'] });
+    } else if (it['type'] === 'toolCall' || it['type'] === 'tool_use') {
+      const name = typeof it['name'] === 'string' ? it['name'] : '?';
+      const input = (it['input'] as Record<string, unknown> | undefined) ??
+                    (it['parameters'] as Record<string, unknown> | undefined) ?? {};
+      toolUses.set(name, (toolUses.get(name) ?? 0) + 1);
+      items.push({ kind: 'tool', tool: { name, input } });
     }
-    return truncate(joined, maxChars);
   }
-  if (toolUses.size > 0) {
-    return '→ ' + [...toolUses.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
-  }
-  return '';
+
+  return { items, toolUses };
 }
 
 function parseTimestamp(val: unknown): Date | null {

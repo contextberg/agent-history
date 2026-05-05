@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 
 interface Props {
   label: string;
@@ -26,7 +26,7 @@ export function CopyButton({ label, getValue }: Props) {
               border: '1px solid rgba(16, 185, 129, 0.3)',
             }
           : {
-              backgroundColor: 'var(--bg-badge)',
+              backgroundColor: 'var(--bg-card)',
               color: 'var(--text-secondary)',
               border: '1px solid var(--border-subtle)',
             }

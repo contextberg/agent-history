@@ -10,6 +10,10 @@ const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 export class ClaudeCodeReader implements IReader {
   readonly source = 'claude-code' as const;
 
+  async isInstalled(): Promise<boolean> {
+    return exists(path.join(os.homedir(), '.claude', 'projects'));
+  }
+
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
     const maxSessions = options.maxSessions ?? DEFAULTS.maxSessions;
     const maxTurns = options.maxTurnsPerSession ?? DEFAULTS.maxTurns;

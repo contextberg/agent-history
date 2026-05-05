@@ -1,4 +1,4 @@
-export type AgentSource = 'claude-code' | 'cursor' | 'openclaw';
+export type AgentSource = 'claude-code' | 'cursor' | 'openclaw' | 'codex' | 'hermes' | 'antigravity';
 
 export interface ToolCall {
   name: string;
@@ -36,5 +36,6 @@ export interface ReaderOptions {
 
 export interface IReader {
   readonly source: AgentSource;
+  isInstalled(): Promise<boolean>;
   read(options?: ReaderOptions): Promise<AgentSession[]>;
 }

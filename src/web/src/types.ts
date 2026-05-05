@@ -1,4 +1,4 @@
-export type AgentSource = 'claude-code' | 'cursor' | 'openclaw';
+export type AgentSource = 'claude-code' | 'cursor' | 'openclaw' | 'codex' | 'hermes' | 'antigravity';
 
 export interface ToolCall {
   name: string;

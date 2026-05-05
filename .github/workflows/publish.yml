@@ -1,9 +1,11 @@
 name: Publish to npm
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.1.0)'
+        required: true
 
 jobs:
   publish:
@@ -21,14 +23,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: npm ci
-
-      - name: Build server
-        run: npx tsup src/cli.ts --format esm --target node18 --out-dir dist
-
-      - name: Build web
-        run: npx vite build
-
-      - name: Publish
-        run: npm publish --access public
+      - run: npm run build
+      - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

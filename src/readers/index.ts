@@ -2,6 +2,9 @@ import type { AgentSession, AgentSource, IReader, ReaderOptions } from './types.
 import { ClaudeCodeReader } from './claude-code.js';
 import { CursorReader } from './cursor.js';
 import { OpenClawReader } from './openclaw.js';
+import { CodexReader } from './codex.js';
+import { HermesReader } from './hermes.js';
+import { AntigravityReader } from './antigravity.js';
 
 export type { AgentSession, AgentTurn, AgentSource, IReader, ReaderOptions } from './types.js';
 
@@ -13,6 +16,9 @@ export class AgentHistoryService {
       new ClaudeCodeReader(),
       new CursorReader(),
       new OpenClawReader(),
+      new CodexReader(),
+      new HermesReader(),
+      new AntigravityReader(),
     ];
   }
 
@@ -32,5 +38,12 @@ export class AgentHistoryService {
     const reader = this.readers.find((r) => r.source === source);
     if (!reader) return [];
     return reader.read(options);
+  }
+
+  async getStatus(): Promise<Record<AgentSource, boolean>> {
+    const entries = await Promise.all(
+      this.readers.map(async (r) => [r.source, await r.isInstalled()] as const),
+    );
+    return Object.fromEntries(entries) as Record<AgentSource, boolean>;
   }
 }

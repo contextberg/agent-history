@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import type { AgentSession, AgentTurn, IReader, ReaderOptions } from './types.js';
+import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, extractProjectName, isWithinDate, selectTurns } from './utils.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
@@ -12,6 +12,10 @@ const THINKING_BLOCK_RE = /\n\n\*\*[A-Z][a-zA-Z ]+\*\*\n/;
 
 export class CursorReader implements IReader {
   readonly source = 'cursor' as const;
+
+  async isInstalled(): Promise<boolean> {
+    return exists(path.join(os.homedir(), '.cursor', 'projects'));
+  }
 
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
     const maxSessions = options.maxSessions ?? DEFAULTS.maxSessions;
@@ -64,7 +68,7 @@ export class CursorReader implements IReader {
         if (sessions.length >= maxSessions) break;
       }
     } catch {
-      // 空を返す
+      // return empty on unreadable directories
     }
 
     return sessions
@@ -81,7 +85,31 @@ async function parseSession(
 ): Promise<AgentSession | null> {
   const turns: AgentTurn[] = [];
   let pendingUserMessage: string | null = null;
-  let lastAssistantText: string | null = null;
+  const pendingItems: AssistantItem[] = [];
+  const pendingTools = new Map<string, number>();
+
+  function flushTurn(): void {
+    if (!pendingUserMessage || pendingItems.length === 0) return;
+    const textParts = pendingItems
+      .filter((i): i is { kind: 'text'; text: string } => i.kind === 'text')
+      .map((i) => i.text)
+      .join(' ');
+    let summary = '';
+    if (textParts) {
+      if (pendingTools.size > 0) {
+        const suffix = ' [' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ') + ']';
+        summary = truncate(textParts, Math.max(0, maxChars - suffix.length)) + suffix;
+      } else {
+        summary = truncate(textParts, maxChars);
+      }
+    } else if (pendingTools.size > 0) {
+      summary = '→ ' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
+    }
+    turns.push({ userMessage: pendingUserMessage, assistantSummary: summary, items: [...pendingItems] });
+    pendingUserMessage = null;
+    pendingItems.length = 0;
+    pendingTools.clear();
+  }
 
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -98,29 +126,24 @@ async function parseSession(
       if (!Array.isArray(contentVal)) continue;
 
       if (role === 'user') {
-        const text = extractText(contentVal);
+        const text = extractFirstText(contentVal);
         if (!text) continue;
 
         const match = USER_QUERY_RE.exec(text);
         if (!match) continue;
 
-        if (pendingUserMessage !== null && lastAssistantText !== null) {
-          const t = truncate(lastAssistantText, maxChars);
-          turns.push({ userMessage: pendingUserMessage, assistantSummary: t, items: [{ kind: 'text', text: t }] });
-        }
-
+        flushTurn();
         pendingUserMessage = truncate(match[1]!.trim(), maxChars);
-        lastAssistantText = null;
       } else if (role === 'assistant' && pendingUserMessage !== null) {
-        const text = extractText(contentVal);
-        if (text) lastAssistantText = stripThinkingBlock(text);
+        const { items, toolUses } = extractAssistantParts(contentVal);
+        pendingItems.push(...items);
+        for (const [name, count] of toolUses) {
+          pendingTools.set(name, (pendingTools.get(name) ?? 0) + count);
+        }
       }
     }
 
-    if (pendingUserMessage !== null && lastAssistantText !== null) {
-      const t = truncate(lastAssistantText, maxChars);
-      turns.push({ userMessage: pendingUserMessage, assistantSummary: t, items: [{ kind: 'text', text: t }] });
-    }
+    flushTurn();
   } catch {
     return null;
   }
@@ -137,13 +160,37 @@ async function parseSession(
   };
 }
 
-function extractText(contentArray: unknown[]): string {
+function extractFirstText(contentArray: unknown[]): string {
   for (const item of contentArray) {
     if (!item || typeof item !== 'object') continue;
     const it = item as Record<string, unknown>;
     if (it['type'] === 'text' && typeof it['text'] === 'string') return it['text'];
   }
   return '';
+}
+
+function extractAssistantParts(
+  contentArray: unknown[],
+): { items: AssistantItem[]; toolUses: Map<string, number> } {
+  const items: AssistantItem[] = [];
+  const toolUses = new Map<string, number>();
+
+  for (const item of contentArray) {
+    if (!item || typeof item !== 'object') continue;
+    const it = item as Record<string, unknown>;
+
+    if (it['type'] === 'text' && typeof it['text'] === 'string') {
+      const stripped = stripThinkingBlock(it['text']).trim();
+      if (stripped) items.push({ kind: 'text', text: stripped });
+    } else if (it['type'] === 'tool_use' || it['type'] === 'tool_call') {
+      const name = typeof it['name'] === 'string' ? it['name'] : '?';
+      const input = (it['input'] as Record<string, unknown>) ?? {};
+      toolUses.set(name, (toolUses.get(name) ?? 0) + 1);
+      items.push({ kind: 'tool', tool: { name, input } });
+    }
+  }
+
+  return { items, toolUses };
 }
 
 function stripThinkingBlock(text: string): string {
