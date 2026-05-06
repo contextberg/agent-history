@@ -52,11 +52,14 @@ export class CopilotReader implements IReader {
         const project = await readWorkspaceProject(wsDir);
         const files = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
         for (const f of files) {
-          if (!f.isFile() || !f.name.endsWith('.jsonl')) continue;
+          if (!f.isFile()) continue;
+          const isJsonl = f.name.endsWith('.jsonl');
+          const isJson = !isJsonl && f.name.endsWith('.json');
+          if (!isJsonl && !isJson) continue;
           const fp = path.join(sessionsDir, f.name);
           const stat = await fs.stat(fp).catch(() => null);
           if (!stat) continue;
-          candidates.push({ fp, mtime: stat.mtime, project, format: 'jsonl' });
+          candidates.push({ fp, mtime: stat.mtime, project, format: isJsonl ? 'jsonl' : 'json' });
         }
       }
 

@@ -81,15 +81,33 @@ export function App() {
   }
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([fetchSessions(source), fetchStatus().catch(() => undefined)])
-      .then(([data, stat]) => {
-        setSessions(data);
-        setStatus(stat);
-        if (data.length > 0 && !selected) setSelected(data[0]);
-      })
-      .catch((err) => console.error('Failed to fetch sessions:', err))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+
+    const refresh = (showSpinner: boolean) => {
+      if (showSpinner) setLoading(true);
+      Promise.all([fetchSessions(source), fetchStatus().catch(() => undefined)])
+        .then(([data, stat]) => {
+          if (cancelled) return;
+          setSessions(data);
+          setStatus(stat);
+          setSelected((cur) => cur ?? (data.length > 0 ? data[0] : null));
+        })
+        .catch((err) => console.error('Failed to fetch sessions:', err))
+        .finally(() => { if (!cancelled && showSpinner) setLoading(false); });
+    };
+
+    refresh(true);
+    const interval = window.setInterval(() => refresh(false), 15_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(false); };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
