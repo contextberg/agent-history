@@ -3,6 +3,7 @@ import type { AgentSession, AssistantItem, ToolCall } from '../types';
 import type { TranscriptStyle, ToolStyle, Density } from '../hooks/useViewSettings';
 import { sourceLabel, sourceHex, sourceShort } from '../utils/source';
 import { CopyButton } from './CopyButton';
+import { SourceIcon } from './SourceIcon';
 import { buildMarkdown } from '../utils/copy';
 
 interface Props {
@@ -395,12 +396,11 @@ function TranscriptChat({ session, toolStyle, showToolCalls, density }: { sessio
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{
                 width: 26, height: 26, borderRadius: 7, flexShrink: 0,
-                backgroundColor: hex, color: 'white',
+                backgroundColor: hex + '18',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
-                boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.15)',
+                border: '1px solid ' + hex + '30',
               }}>
-                {short}
+                <SourceIcon source={session.source} size={16} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>

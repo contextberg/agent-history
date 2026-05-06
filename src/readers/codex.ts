@@ -73,11 +73,16 @@ async function parseSession(
 ): Promise<AgentSession | null> {
   let project = 'codex';
   let startedAt: Date | null = null;
+  let endedAt: Date | null = null;
+  let cwd: string | undefined;
 
   let pendingUserMessage: string | null = null;
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
   const pendingCallIndex = new Map<string, number>(); // call_id -> pendingItems index
+  let pendingTurnStart: Date | null = null;
+  let pendingTurnEnd: Date | null = null;
+  let pendingTouchedFiles: Set<string> = new Set();
   const turns: AgentTurn[] = [];
 
   function flushTurn(): void {
@@ -98,12 +103,19 @@ async function parseSession(
       summary = '→ ' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
     }
     if (summary) {
-      turns.push({ userMessage: pendingUserMessage, assistantSummary: summary, items: [...pendingItems] });
+      const turn: AgentTurn = { userMessage: pendingUserMessage, assistantSummary: summary, items: [...pendingItems] };
+      if (pendingTurnStart) turn.startedAt = pendingTurnStart;
+      if (pendingTurnEnd) turn.endedAt = pendingTurnEnd;
+      if (pendingTouchedFiles.size > 0) turn.touchedFiles = [...pendingTouchedFiles];
+      turns.push(turn);
     }
     pendingUserMessage = null;
     pendingItems.length = 0;
     pendingTools.clear();
     pendingCallIndex.clear();
+    pendingTurnStart = null;
+    pendingTurnEnd = null;
+    pendingTouchedFiles = new Set();
   }
 
   try {
@@ -116,16 +128,28 @@ async function parseSession(
 
       const type = root['type'] as string | undefined;
       const payload = root['payload'] as Record<string, unknown> | undefined;
+      const lineTs = parseTimestamp(root['timestamp']);
+      if (lineTs) endedAt = endedAt && endedAt.getTime() > lineTs.getTime() ? endedAt : lineTs;
 
-      // Project name and start time from session metadata
+      // Project name, cwd, and start time from session metadata
       if (type === 'session_meta' && payload) {
-        const cwd = payload['cwd'] as string | undefined;
-        if (cwd) project = path.basename(cwd.replace(/[/\\]+$/, '')) || project;
+        const c = payload['cwd'] as string | undefined;
+        if (c) {
+          cwd = c;
+          project = path.basename(c.replace(/[/\\]+$/, '')) || project;
+        }
         const ts = payload['timestamp'] as string | undefined;
         if (ts) {
           const d = new Date(ts);
           if (!isNaN(d.getTime())) startedAt = d;
         }
+        continue;
+      }
+
+      // turn_context can update cwd between turns
+      if (type === 'turn_context' && payload) {
+        const c = payload['cwd'] as string | undefined;
+        if (c) cwd = c;
         continue;
       }
 
@@ -144,7 +168,9 @@ async function parseSession(
             if (text && !text.startsWith('<environment_context>')) {
               flushTurn();
               pendingUserMessage = truncate(text, maxChars);
-              if (!startedAt) startedAt = new Date();
+              pendingTurnStart = lineTs;
+              pendingTurnEnd = lineTs;
+              if (!startedAt) startedAt = lineTs ?? new Date();
             }
           }
         }
@@ -179,6 +205,8 @@ async function parseSession(
         const idx = pendingItems.length;
         pendingItems.push({ kind: 'tool', tool: { name, input } });
         if (callId) pendingCallIndex.set(callId, idx);
+        for (const f of extractEditedFilesFromCodexCall(name, input, cwd)) pendingTouchedFiles.add(f);
+        if (lineTs) pendingTurnEnd = lineTs;
         continue;
       }
 
@@ -204,13 +232,72 @@ async function parseSession(
   if (turns.length === 0) return null;
 
   const stat = await fs.stat(filePath).catch(() => null);
-  return {
+  const session: AgentSession = {
     id: randomUUID(),
     source: 'codex',
     project,
     startedAt: startedAt ?? stat?.mtime ?? new Date(),
     turns: selectTurns(turns, maxTurns),
   };
+  if (cwd) session.cwd = cwd;
+  if (endedAt) session.endedAt = endedAt;
+  return session;
+}
+
+/**
+ * Best-effort file-path extraction from a codex function_call. Codex's tool
+ * surface is mostly `shell_command` (where edits happen via apply_patch heredoc)
+ * and `apply_patch`-style structured tools we haven't seen samples of. We err
+ * conservative: only return paths from structured argument keys, never parse
+ * shell command strings (too noisy / risk of false positives).
+ */
+function extractEditedFilesFromCodexCall(
+  name: string,
+  input: Record<string, unknown>,
+  cwd: string | undefined,
+): string[] {
+  // shell_command with `apply_patch` is by far the most common edit channel.
+  // The patch is in `command` as a string — we parse it for `*** Update File: <path>`
+  // / `*** Add File: <path>` / `*** Delete File: <path>` markers (apply_patch's
+  // own format), which are unambiguous and reliable.
+  if (name === 'shell_command' || name === 'shell') {
+    const cmd = typeof input['command'] === 'string'
+      ? (input['command'] as string)
+      : Array.isArray(input['command'])
+        ? (input['command'] as unknown[]).filter((x) => typeof x === 'string').join(' ')
+        : '';
+    if (!cmd.includes('apply_patch')) return [];
+    const out: string[] = [];
+    const re = /\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(cmd)) !== null) {
+      const raw = m[1]?.trim();
+      if (!raw) continue;
+      out.push(path.isAbsolute(raw) ? raw : (cwd ? path.resolve(cwd, raw) : raw));
+    }
+    return out;
+  }
+
+  // Generic: structured tools with a path-like key.
+  for (const key of ['path', 'file_path', 'filepath', 'file', 'target_file']) {
+    const v = input[key];
+    if (typeof v === 'string' && v) {
+      return [path.isAbsolute(v) ? v : (cwd ? path.resolve(cwd, v) : v)];
+    }
+  }
+  const paths = input['paths'];
+  if (Array.isArray(paths)) {
+    return paths
+      .filter((x): x is string => typeof x === 'string' && x.length > 0)
+      .map((p) => (path.isAbsolute(p) ? p : (cwd ? path.resolve(cwd, p) : p)));
+  }
+  return [];
+}
+
+function parseTimestamp(val: unknown): Date | null {
+  if (!val) return null;
+  const d = new Date(val as string);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 async function exists(p: string): Promise<boolean> {

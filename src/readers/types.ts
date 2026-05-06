@@ -17,6 +17,15 @@ export interface AgentTurn {
   assistantSummary: string;
   /** Ordered sequence of text blocks and tool calls as they occurred. */
   items: AssistantItem[];
+  /** Time of the user message that opened this turn, if known. */
+  startedAt?: Date;
+  /** Time of the last assistant/tool entry attributed to this turn, if known. */
+  endedAt?: Date;
+  /**
+   * Absolute file paths touched by this turn's tool calls (Edit/Write/Read/MultiEdit/NotebookEdit).
+   * Used by commit-linkage scoring; not displayed in the UI directly.
+   */
+  touchedFiles?: string[];
 }
 
 export interface AgentSession {
@@ -25,6 +34,12 @@ export interface AgentSession {
   project: string;
   startedAt: Date;
   turns: AgentTurn[];
+  /** Absolute working directory the session ran in, when the source records it. */
+  cwd?: string;
+  /** Time of the last entry in the session, when known. */
+  endedAt?: Date;
+  /** Git branch active during the session, when the source records it. */
+  gitBranch?: string;
 }
 
 export interface ReaderOptions {

@@ -80,7 +80,13 @@ async function parseSession(
 ): Promise<AgentSession | null> {
   const turns: AgentTurn[] = [];
   let startedAt: Date | null = null;
+  let endedAt: Date | null = null;
+  let cwd: string | undefined;
+  let gitBranch: string | undefined;
   let pendingUserMessage: string | null = null;
+  let pendingTurnStart: Date | null = null;
+  let pendingTurnEnd: Date | null = null;
+  let pendingTouchedFiles: Set<string> = new Set();
   // Ordered sequence of items within the current turn (text blocks and tool calls).
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
@@ -105,6 +111,10 @@ async function parseSession(
 
       if (targetDate && timestamp && !isWithinDate(timestamp, targetDate)) continue;
 
+      if (!cwd && typeof root['cwd'] === 'string') cwd = root['cwd'] as string;
+      if (!gitBranch && typeof root['gitBranch'] === 'string') gitBranch = root['gitBranch'] as string;
+      if (timestamp) endedAt = endedAt && endedAt.getTime() > timestamp.getTime() ? endedAt : timestamp;
+
       if (type === 'user') {
         const contentVal = msg?.['content'];
 
@@ -114,44 +124,54 @@ async function parseSession(
         if (Array.isArray(contentVal)) {
           if (pendingUserMessage !== null) {
             absorbToolResults(contentVal, pendingItems, pendingUseIndex, maxChars);
+            if (timestamp) pendingTurnEnd = timestamp;
           }
           continue;
         }
         if (typeof contentVal !== 'string') continue;
 
-        flushTurn(turns, pendingUserMessage, pendingItems, pendingTools, maxChars);
+        flushTurn(turns, pendingUserMessage, pendingItems, pendingTools, maxChars, pendingTurnStart, pendingTurnEnd, pendingTouchedFiles);
         pendingUserMessage = truncate(contentVal, maxChars);
         pendingItems.length = 0;
         pendingTools.clear();
         pendingUseIndex.clear();
+        pendingTurnStart = timestamp;
+        pendingTurnEnd = timestamp;
+        pendingTouchedFiles = new Set();
         if (!startedAt) startedAt = timestamp ?? new Date();
       } else if ((type === 'assistant' || msgRole === 'assistant') && pendingUserMessage !== null) {
         const contentVal = msg?.['content'];
         if (!Array.isArray(contentVal)) continue;
 
-        const { items, toolUses, idIndex } = extractAssistantParts(contentVal, pendingItems.length);
+        const { items, toolUses, idIndex, files } = extractAssistantParts(contentVal, pendingItems.length, cwd);
         pendingItems.push(...items);
         for (const [name, count] of toolUses) {
           pendingTools.set(name, (pendingTools.get(name) ?? 0) + count);
         }
         for (const [id, idx] of idIndex) pendingUseIndex.set(id, idx);
+        for (const f of files) pendingTouchedFiles.add(f);
+        if (timestamp) pendingTurnEnd = timestamp;
       }
     }
 
-    flushTurn(turns, pendingUserMessage, pendingItems, pendingTools, maxChars);
+    flushTurn(turns, pendingUserMessage, pendingItems, pendingTools, maxChars, pendingTurnStart, pendingTurnEnd, pendingTouchedFiles);
   } catch {
     return null;
   }
 
   if (turns.length === 0) return null;
 
-  return {
+  const session: AgentSession = {
     id: randomUUID(),
     source: 'claude-code',
     project: projectName,
     startedAt: startedAt ?? new Date(),
     turns: selectTurns(turns, maxTurns),
   };
+  if (cwd) session.cwd = cwd;
+  if (gitBranch) session.gitBranch = gitBranch;
+  if (endedAt) session.endedAt = endedAt;
+  return session;
 }
 
 function flushTurn(
@@ -160,6 +180,9 @@ function flushTurn(
   items: AssistantItem[],
   toolUses: Map<string, number>,
   maxChars: number,
+  startedAt: Date | null,
+  endedAt: Date | null,
+  touchedFiles: Set<string>,
 ): void {
   if (!userMessage || items.length === 0) return;
 
@@ -178,16 +201,22 @@ function flushTurn(
     summary = '→ ' + [...toolUses.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
   }
 
-  turns.push({ userMessage, assistantSummary: summary, items: [...items] });
+  const turn: AgentTurn = { userMessage, assistantSummary: summary, items: [...items] };
+  if (startedAt) turn.startedAt = startedAt;
+  if (endedAt) turn.endedAt = endedAt;
+  if (touchedFiles.size > 0) turn.touchedFiles = [...touchedFiles];
+  turns.push(turn);
 }
 
 function extractAssistantParts(
   contentArray: unknown[],
   baseOffset: number,
-): { items: AssistantItem[]; toolUses: Map<string, number>; idIndex: Map<string, number> } {
+  cwd: string | undefined,
+): { items: AssistantItem[]; toolUses: Map<string, number>; idIndex: Map<string, number>; files: string[] } {
   const items: AssistantItem[] = [];
   const toolUses = new Map<string, number>();
   const idIndex = new Map<string, number>();
+  const files: string[] = [];
 
   for (const item of contentArray) {
     if (!item || typeof item !== 'object') continue;
@@ -202,10 +231,33 @@ function extractAssistantParts(
       const idx = baseOffset + items.length;
       items.push({ kind: 'tool', tool: { name, input } });
       if (id) idIndex.set(id, idx);
+      const f = extractFilePathFromTool(name, input, cwd);
+      if (f) files.push(f);
     }
   }
 
-  return { items, toolUses, idIndex };
+  return { items, toolUses, idIndex, files };
+}
+
+/**
+ * Extract a file path from a tool_use input where the tool is known to operate
+ * on a single file (Edit/Write/Read/MultiEdit/NotebookEdit). Returns an absolute
+ * path when possible (resolving relative paths against the session cwd).
+ */
+function extractFilePathFromTool(
+  name: string,
+  input: Record<string, unknown>,
+  cwd: string | undefined,
+): string | null {
+  // Only edit-class tools — reads are exploration noise that drowns out the
+  // edit-vs-commit overlap signal used for linkage.
+  const fileTools = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+  if (!fileTools.has(name)) return null;
+  const raw = input['file_path'] ?? input['notebook_path'] ?? input['path'];
+  if (typeof raw !== 'string' || !raw) return null;
+  if (path.isAbsolute(raw)) return raw;
+  if (cwd) return path.resolve(cwd, raw);
+  return raw;
 }
 
 function absorbToolResults(

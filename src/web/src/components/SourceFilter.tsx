@@ -1,6 +1,6 @@
 import React from 'react';
 import type { AgentSource } from '../types';
-import { sourceHex } from '../utils/source';
+import { SourceIcon } from './SourceIcon';
 
 const SOURCES: { value: AgentSource; label: string }[] = [
   { value: 'claude-code', label: 'Claude Code' },
@@ -19,7 +19,7 @@ interface Props {
 export function SourceFilter({ value, onChange }: Props) {
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-      <FilterPill active={!value} onClick={() => onChange(undefined)} hex={undefined}>
+      <FilterPill active={!value} onClick={() => onChange(undefined)} source={undefined}>
         All
       </FilterPill>
       {SOURCES.map((s) => (
@@ -27,7 +27,7 @@ export function SourceFilter({ value, onChange }: Props) {
           key={s.value}
           active={value === s.value}
           onClick={() => onChange(s.value)}
-          hex={sourceHex(s.value)}
+          source={s.value}
         >
           {s.label}
         </FilterPill>
@@ -39,12 +39,12 @@ export function SourceFilter({ value, onChange }: Props) {
 function FilterPill({
   active,
   onClick,
-  hex,
+  source,
   children,
 }: {
   active: boolean;
   onClick: () => void;
-  hex: string | undefined;
+  source: AgentSource | undefined;
   children: React.ReactNode;
 }) {
   return (
@@ -67,9 +67,7 @@ function FilterPill({
         transition: 'background 90ms, color 90ms',
       }}
     >
-      {hex && (
-        <span style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: hex, flexShrink: 0 }} />
-      )}
+      {source && <SourceIcon source={source} size={13} />}
       {children}
     </button>
   );

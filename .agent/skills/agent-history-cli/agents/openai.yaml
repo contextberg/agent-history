@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent History CLI"
+  short_description: "Use agent-history from the CLI or as an MCP server."
+  default_prompt: "Use the local agent-history CLI to browse or retrieve coding agent conversation history."

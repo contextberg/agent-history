@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { AgentSession, AgentSource } from '../types';
 import { sourceLabel, sourceHex } from '../utils/source';
+import { SourceIcon } from './SourceIcon';
 
 interface Props {
   sessions: AgentSession[];
@@ -117,18 +118,10 @@ function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: b
           }}
         />
 
-        {/* Source dot */}
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: 999,
-            backgroundColor: color,
-            marginTop: 7,
-            flexShrink: 0,
-            boxShadow: `0 0 0 2px ${active ? 'var(--bg-card-selected)' : hover ? 'var(--bg-card-hover)' : 'var(--bg-panel)'}`,
-          }}
-        />
+        {/* Source icon */}
+        <span style={{ marginTop: 4, flexShrink: 0 }}>
+          <SourceIcon source={s.source} size={16} />
+        </span>
 
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Row 1: title + time */}
@@ -192,7 +185,6 @@ export function SessionList({ sessions, selectedId, onSelect, status, query = ''
             </p>
             {status && SOURCES.map((src) => {
               const installed = status[src];
-              const color = sourceHex(src);
               return (
                 <div
                   key={src}
@@ -207,16 +199,9 @@ export function SessionList({ sessions, selectedId, onSelect, status, query = ''
                     opacity: installed ? 1 : 0.55,
                   }}
                 >
-                  <span
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: 999,
-                      backgroundColor: installed ? color : 'var(--text-tertiary)',
-                      flexShrink: 0,
-                      animation: installed ? 'pulse 2s infinite' : 'none',
-                    }}
-                  />
+                  <span style={{ flexShrink: 0, opacity: installed ? 1 : 0.5 }}>
+                    <SourceIcon source={src} size={16} />
+                  </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
                       {sourceLabel(src)}

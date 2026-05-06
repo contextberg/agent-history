@@ -83,9 +83,11 @@ export class CursorReader implements IReader {
         })
         .slice(0, maxSessions);
 
+      const composerToCwd = await loadComposerToCwd(Database);
+
       const sessions: AgentSession[] = [];
       for (const c of filtered) {
-        const session = parseComposer(c, db, maxTurns, maxChars);
+        const session = parseComposer(c, db, maxTurns, maxChars, composerToCwd.get(c.id));
         if (session) sessions.push(session);
       }
       return sessions;
@@ -95,11 +97,81 @@ export class CursorReader implements IReader {
   }
 }
 
+/**
+ * Walk Cursor's per-workspace storage to build composerId → cwd. Each workspace
+ * dir holds a `workspace.json` with `{folder: "file:///..."}` and a
+ * `state.vscdb` whose ItemTable row `composer.composerData` lists the
+ * composers attached to that workspace. Failures fail soft (returns whatever
+ * we managed to read).
+ */
+async function loadComposerToCwd(
+  Database: typeof import('better-sqlite3'),
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const wsRoot = workspaceStorageRoot();
+  if (!await exists(wsRoot)) return out;
+
+  let dirs: string[];
+  try { dirs = await fs.readdir(wsRoot); } catch { return out; }
+
+  for (const d of dirs) {
+    const wsJsonPath = path.join(wsRoot, d, 'workspace.json');
+    let folder: string | null = null;
+    try {
+      const raw = await fs.readFile(wsJsonPath, 'utf-8');
+      const parsed = JSON.parse(raw) as { folder?: string };
+      folder = parsed.folder ?? null;
+    } catch { continue; }
+    if (!folder) continue;
+
+    const cwd = fileUriToPath(folder);
+    if (!cwd) continue;
+
+    const dbPath = path.join(wsRoot, d, 'state.vscdb');
+    if (!await exists(dbPath)) continue;
+    let wdb: import('better-sqlite3').Database;
+    try { wdb = new Database(dbPath, { readonly: true, fileMustExist: true }); } catch { continue; }
+    try {
+      const row = wdb
+        .prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'")
+        .get() as { value: string | null } | undefined;
+      if (!row?.value) continue;
+      let parsed: { allComposers?: Array<{ composerId?: string }> };
+      try { parsed = JSON.parse(row.value); } catch { continue; }
+      const list = parsed?.allComposers ?? [];
+      for (const c of list) {
+        if (typeof c.composerId === 'string') out.set(c.composerId, cwd);
+      }
+    } finally { wdb.close(); }
+  }
+  return out;
+}
+
+function fileUriToPath(uri: string): string | null {
+  if (!uri.startsWith('file://')) return null;
+  let p = decodeURIComponent(uri.slice('file://'.length));
+  // file:///c:/... → starts with '/c:/' on Windows; strip leading '/'
+  if (process.platform === 'win32' && /^\/[a-z]:/i.test(p)) p = p.slice(1);
+  return path.normalize(p);
+}
+
+function workspaceStorageRoot(): string {
+  if (process.platform === 'win32') {
+    const appData = process.env['APPDATA'] || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Cursor', 'User', 'workspaceStorage');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'workspaceStorage');
+  }
+  return path.join(os.homedir(), '.config', 'Cursor', 'User', 'workspaceStorage');
+}
+
 function parseComposer(
   c: ComposerSummary,
   db: import('better-sqlite3').Database,
   maxTurns: number,
   maxChars: number,
+  cwd: string | undefined,
 ): AgentSession | null {
   // Bulk-load all bubbles for this composer in a single query, then index by bubbleId.
   const bubbleRows = db
@@ -121,13 +193,20 @@ function parseComposer(
   let pendingUser: string | null = null;
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
+  let pendingTurnStart: Date | null = null;
+  let pendingTurnEnd: Date | null = null;
+  let pendingTouchedFiles: Set<string> = new Set();
   const turns: AgentTurn[] = [];
+  let lastBubbleEnd: Date | null = null;
 
   function flushTurn(): void {
     if (!pendingUser || pendingItems.length === 0) {
       pendingUser = null;
       pendingItems.length = 0;
       pendingTools.clear();
+      pendingTurnStart = null;
+      pendingTurnEnd = null;
+      pendingTouchedFiles = new Set();
       return;
     }
     const textParts = pendingItems
@@ -146,11 +225,18 @@ function parseComposer(
       summary = '→ ' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
     }
     if (summary) {
-      turns.push({ userMessage: pendingUser, assistantSummary: summary, items: [...pendingItems] });
+      const turn: AgentTurn = { userMessage: pendingUser, assistantSummary: summary, items: [...pendingItems] };
+      if (pendingTurnStart) turn.startedAt = pendingTurnStart;
+      if (pendingTurnEnd) turn.endedAt = pendingTurnEnd;
+      if (pendingTouchedFiles.size > 0) turn.touchedFiles = [...pendingTouchedFiles];
+      turns.push(turn);
     }
     pendingUser = null;
     pendingItems.length = 0;
     pendingTools.clear();
+    pendingTurnStart = null;
+    pendingTurnEnd = null;
+    pendingTouchedFiles = new Set();
   }
 
   for (const h of c.headers) {
@@ -158,15 +244,32 @@ function parseComposer(
     if (!b) continue;
 
     const type = (typeof h.type === 'number' ? h.type : (b['type'] as number | undefined)) ?? 0;
+    const { startedAt: bStart, endedAt: bEnd } = extractBubbleTimings(b);
+    if (bEnd) lastBubbleEnd = bEnd;
 
     if (type === 1) {
       flushTurn();
       const text = typeof b['text'] === 'string' ? (b['text'] as string).trim() : '';
       if (text) pendingUser = truncate(text, maxChars);
+      pendingTurnStart = bStart ?? bEnd ?? null;
+      pendingTurnEnd = bEnd ?? bStart ?? null;
+      // Cursor attaches diffsSinceLastApply (the prior turn's applied edits) to
+      // the *next* user bubble. We attribute those edits back to the just-closed
+      // turn, since they describe what the assistant produced.
+      const lastTurn = turns[turns.length - 1];
+      if (lastTurn) {
+        const existing = new Set(lastTurn.touchedFiles ?? []);
+        for (const f of extractEditedFilesFromBubble(b, cwd)) existing.add(f);
+        if (existing.size > 0) lastTurn.touchedFiles = [...existing];
+      }
       continue;
     }
 
     if (type !== 2 || pendingUser === null) continue;
+
+    if (bEnd) pendingTurnEnd = bEnd;
+
+    for (const f of extractEditedFilesFromBubble(b, cwd)) pendingTouchedFiles.add(f);
 
     const text = typeof b['text'] === 'string' ? (b['text'] as string).trim() : '';
     if (text) pendingItems.push({ kind: 'text', text: truncate(text, maxChars) });
@@ -195,13 +298,69 @@ function parseComposer(
       ? new Date(c.lastUpdatedAt)
       : new Date();
 
-  return {
+  const session: AgentSession = {
     id: c.id,
     source: 'cursor',
     project: (c.name ?? 'cursor').slice(0, 60) || 'cursor',
     startedAt,
     turns: selectTurns(turns, maxTurns),
   };
+  if (cwd) session.cwd = cwd;
+  const endedAt = lastBubbleEnd ?? (c.lastUpdatedAt > 0 ? new Date(c.lastUpdatedAt) : null);
+  if (endedAt) session.endedAt = endedAt;
+  return session;
+}
+
+/**
+ * Per-bubble timings live under `timingInfo` (epoch ms). `clientRpcSendTime` is
+ * roughly when the user submitted; `clientEndTime` is when the response settled.
+ */
+function extractBubbleTimings(b: Record<string, unknown>): { startedAt: Date | null; endedAt: Date | null } {
+  const ti = b['timingInfo'] as Record<string, unknown> | undefined;
+  if (!ti) return { startedAt: null, endedAt: null };
+  const send = numberOr(ti['clientRpcSendTime'], 0);
+  const end = numberOr(ti['clientEndTime'], 0);
+  return {
+    startedAt: send > 0 ? new Date(send) : null,
+    endedAt: end > 0 ? new Date(end) : null,
+  };
+}
+
+/**
+ * Edit-only file extraction from a Cursor bubble. Cursor records many file
+ * references (relevantFiles, attachedCodeChunks, codeBlocks) — most are
+ * exploration noise. The closest analogue to "the agent edited this file" is
+ * `diffsSinceLastApply[].relativeWorkspacePath` (committed-to-disk diffs) and
+ * `deletedFiles[].relativeWorkspacePath`.
+ */
+function extractEditedFilesFromBubble(b: Record<string, unknown>, cwd: string | undefined): string[] {
+  const out: string[] = [];
+  const diffs = b['diffsSinceLastApply'];
+  if (Array.isArray(diffs)) {
+    for (const d of diffs) {
+      if (!d || typeof d !== 'object') continue;
+      const rel = (d as Record<string, unknown>)['relativeWorkspacePath'];
+      const abs = resolveCursorPath(rel, cwd);
+      if (abs) out.push(abs);
+    }
+  }
+  const deleted = b['deletedFiles'];
+  if (Array.isArray(deleted)) {
+    for (const d of deleted) {
+      if (!d || typeof d !== 'object') continue;
+      const rel = (d as Record<string, unknown>)['relativeWorkspacePath'];
+      const abs = resolveCursorPath(rel, cwd);
+      if (abs) out.push(abs);
+    }
+  }
+  return out;
+}
+
+function resolveCursorPath(rel: unknown, cwd: string | undefined): string | null {
+  if (typeof rel !== 'string' || !rel) return null;
+  if (path.isAbsolute(rel)) return rel;
+  if (cwd) return path.resolve(cwd, rel);
+  return rel;
 }
 
 function extractToolInput(tfd: Record<string, unknown>): Record<string, unknown> {
