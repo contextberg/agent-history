@@ -7,7 +7,11 @@ import { SourceFilter } from './components/SourceFilter';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ThemeToggle } from './components/ThemeToggle';
 import { useSettings } from './hooks/useSettings';
-import { useViewSettings } from './hooks/useViewSettings';
+import {
+  useViewSettings,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from './hooks/useViewSettings';
 
 type SidebarTab = 'sessions' | 'settings';
 
@@ -43,6 +47,38 @@ export function App() {
   const { settings, update: updateSettings } = useSettings();
   const { settings: viewSettings, update: updateView } = useViewSettings();
   const searchRef = useRef<HTMLInputElement>(null);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+
+  const sidebarWidth = dragWidth ?? viewSettings.sidebarWidth;
+
+  function startResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = viewSettings.sidebarWidth;
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, startWidth + (ev.clientX - startX)),
+      );
+      setDragWidth(next);
+    };
+    const onUp = (ev: PointerEvent) => {
+      const final = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, startWidth + (ev.clientX - startX)),
+      );
+      updateView('sidebarWidth', final);
+      setDragWidth(null);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -91,20 +127,61 @@ export function App() {
         const idx = selected ? filteredSessions.findIndex((s) => s.id === selected.id) : 0;
         if (idx > 0) setSelected(filteredSessions[idx - 1]);
       }
+      if (e.key === '[') {
+        updateView('sidebarOpen', !viewSettings.sidebarOpen);
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [filteredSessions, selected, settings.display.showToolCalls, updateSettings]);
+  }, [filteredSessions, selected, settings.display.showToolCalls, updateSettings, updateView, viewSettings.sidebarOpen]);
 
   return (
     <div
       className="flex h-screen w-full overflow-hidden"
       style={{ backgroundColor: 'var(--bg-app)', color: 'var(--text-primary)' }}
     >
+      {/* Sidebar — closed rail */}
+      {!viewSettings.sidebarOpen && (
+        <aside
+          className="shrink-0 flex flex-col items-center py-3 relative z-20"
+          style={{
+            width: 36,
+            backgroundColor: 'var(--bg-panel)',
+            borderRight: '1px solid var(--border-main)',
+            boxShadow: 'var(--shadow-panel)',
+          }}
+        >
+          <button
+            onClick={() => updateView('sidebarOpen', true)}
+            title="Open sidebar ([)"
+            aria-label="Open sidebar"
+            style={{
+              width: 26,
+              height: 26,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 7,
+              border: '1px solid var(--border-main)',
+              backgroundColor: 'var(--bg-card)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </button>
+        </aside>
+      )}
+
       {/* Sidebar */}
+      {viewSettings.sidebarOpen && (
       <aside
-        className="w-80 shrink-0 flex flex-col relative z-20"
+        className="shrink-0 flex flex-col relative z-20"
         style={{
+          width: sidebarWidth,
           backgroundColor: 'var(--bg-panel)',
           borderRight: '1px solid var(--border-main)',
           boxShadow: 'var(--shadow-panel)',
@@ -131,7 +208,31 @@ export function App() {
                 agent<span style={{ color: 'var(--text-tertiary)' }}>·</span>history
               </h1>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-1">
+              <ThemeToggle />
+              <button
+                onClick={() => updateView('sidebarOpen', false)}
+                title="Close sidebar ([)"
+                aria-label="Close sidebar"
+                style={{
+                  width: 24,
+                  height: 24,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m15 18-6-6 6-6" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -238,7 +339,27 @@ export function App() {
             <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5 }}>to search</span>
           </div>
         </div>
+
+        {/* Resize handle */}
+        <div
+          onPointerDown={startResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize"
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: -3,
+            width: 6,
+            height: '100%',
+            cursor: 'col-resize',
+            zIndex: 30,
+            touchAction: 'none',
+          }}
+        />
       </aside>
+      )}
 
       {/* Main */}
       <main className="flex-1 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-app)' }}>

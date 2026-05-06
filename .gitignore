@@ -2,5 +2,5 @@ node_modules
 dist
 .env
 *.local
-.claude
+.claude/to-do/
 .playwright-mcp

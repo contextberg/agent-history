@@ -10,13 +10,21 @@ export interface ViewSettings {
   toolStyle: ToolStyle;
   density: Density;
   accent: AccentName;
+  sidebarOpen: boolean;
+  sidebarWidth: number;
 }
+
+export const SIDEBAR_MIN_WIDTH = 240;
+export const SIDEBAR_MAX_WIDTH = 560;
+export const SIDEBAR_DEFAULT_WIDTH = 320;
 
 const DEFAULTS: ViewSettings = {
   transcriptStyle: 'chat',
   toolStyle: 'collapse',
   density: 'cozy',
   accent: 'indigo',
+  sidebarOpen: true,
+  sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
 };
 
 const STORAGE_KEY = 'ah-view-settings';

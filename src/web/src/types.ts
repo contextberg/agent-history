@@ -1,8 +1,9 @@
-export type AgentSource = 'claude-code' | 'cursor' | 'openclaw' | 'codex' | 'hermes';
+export type AgentSource = 'claude-code' | 'cursor' | 'openclaw' | 'codex' | 'hermes' | 'copilot';
 
 export interface ToolCall {
   name: string;
   input: Record<string, unknown>;
+  output?: string;
 }
 
 export type AssistantItem =

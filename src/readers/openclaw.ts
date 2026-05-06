@@ -83,6 +83,7 @@ async function parseSession(
   let pendingUserMessage: string | null = null;
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
+  const pendingCallIndex = new Map<string, number>(); // toolCall.id -> pendingItems index
 
   function flushTurn(): void {
     if (!pendingUserMessage || pendingItems.length === 0) return;
@@ -105,6 +106,7 @@ async function parseSession(
     pendingUserMessage = null;
     pendingItems.length = 0;
     pendingTools.clear();
+    pendingCallIndex.clear();
   }
 
   try {
@@ -136,7 +138,17 @@ async function parseSession(
 
       const msg = root['message'] as Record<string, unknown> | undefined;
       const role = msg?.['role'];
-      if (role === 'toolResult') continue;
+
+      if (role === 'toolResult' && pendingUserMessage !== null) {
+        const callId = msg?.['toolCallId'] as string | undefined;
+        if (!callId) continue;
+        const idx = pendingCallIndex.get(callId);
+        if (idx === undefined) continue;
+        const target = pendingItems[idx];
+        if (!target || target.kind !== 'tool') continue;
+        target.tool.output = truncate(stringifyOpenClawResult(msg?.['content']), maxChars);
+        continue;
+      }
 
       if (role === 'user') {
         flushTurn();
@@ -148,11 +160,12 @@ async function parseSession(
         }
       } else if (role === 'assistant' && pendingUserMessage !== null) {
         const contentVal = msg?.['content'];
-        const { items, toolUses } = extractAssistantParts(contentVal);
+        const { items, toolUses, idIndex } = extractAssistantParts(contentVal, pendingItems.length);
         pendingItems.push(...items);
         for (const [name, count] of toolUses) {
           pendingTools.set(name, (pendingTools.get(name) ?? 0) + count);
         }
+        for (const [id, idx] of idIndex) pendingCallIndex.set(id, idx);
       }
     }
 
@@ -185,11 +198,13 @@ function extractFirstText(content: unknown): string {
 
 function extractAssistantParts(
   content: unknown,
-): { items: AssistantItem[]; toolUses: Map<string, number> } {
+  baseOffset: number,
+): { items: AssistantItem[]; toolUses: Map<string, number>; idIndex: Map<string, number> } {
   const items: AssistantItem[] = [];
   const toolUses = new Map<string, number>();
+  const idIndex = new Map<string, number>();
 
-  if (!Array.isArray(content)) return { items, toolUses };
+  if (!Array.isArray(content)) return { items, toolUses, idIndex };
 
   for (const item of content) {
     if (!item || typeof item !== 'object') continue;
@@ -203,11 +218,28 @@ function extractAssistantParts(
                     (it['parameters'] as Record<string, unknown> | undefined) ??
                     (it['arguments'] as Record<string, unknown> | undefined) ?? {};
       toolUses.set(name, (toolUses.get(name) ?? 0) + 1);
+      const id = typeof it['id'] === 'string' ? it['id'] : undefined;
+      const idx = baseOffset + items.length;
       items.push({ kind: 'tool', tool: { name, input } });
+      if (id) idIndex.set(id, idx);
     }
   }
 
-  return { items, toolUses };
+  return { items, toolUses, idIndex };
+}
+
+function stringifyOpenClawResult(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return JSON.stringify(content ?? '');
+  const parts: string[] = [];
+  for (const item of content) {
+    if (item && typeof item === 'object') {
+      const it = item as Record<string, unknown>;
+      if (typeof it['text'] === 'string') { parts.push(it['text']); continue; }
+    }
+    parts.push(JSON.stringify(item));
+  }
+  return parts.join('\n');
 }
 
 function parseTimestamp(val: unknown): Date | null {

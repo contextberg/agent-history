@@ -51,6 +51,19 @@ const TOOL_VERBS: Record<string, string> = {
 
 /* ── Tool call variants ── */
 
+function ToolOutput({ output }: { output: string }) {
+  return (
+    <div style={{ marginTop: 8, borderTop: '1px dashed var(--border-subtle)', paddingTop: 8 }}>
+      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)', marginBottom: 4 }}>
+        Output
+      </div>
+      <pre className="font-mono" style={{ margin: 0, fontSize: 10.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 280, overflow: 'auto' }}>
+        {output}
+      </pre>
+    </div>
+  );
+}
+
 function ToolCallCollapse({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false);
   const preview = getPreview(call);
@@ -85,6 +98,7 @@ function ToolCallCollapse({ call }: { call: ToolCall }) {
           <pre className="font-mono" style={{ margin: 0, fontSize: 10.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
             {JSON.stringify(call.input, null, 2)}
           </pre>
+          {call.output && <ToolOutput output={call.output} />}
         </div>
       )}
     </div>
@@ -144,6 +158,7 @@ function ToolCallCard({ call }: { call: ToolCall }) {
         <pre className="font-mono" style={{ margin: 0, fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
           {preview || JSON.stringify(call.input)}
         </pre>
+        {call.output && <ToolOutput output={call.output} />}
       </div>
     </div>
   );

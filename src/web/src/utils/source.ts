@@ -7,6 +7,7 @@ export function sourceLabel(source: AgentSource): string {
     openclaw: 'OpenClaw',
     codex: 'Codex',
     hermes: 'Hermes',
+    copilot: 'GitHub Copilot',
   };
   return labels[source];
 }
@@ -18,6 +19,7 @@ export function sourceShort(source: AgentSource): string {
     openclaw: 'OC',
     codex: 'CX',
     hermes: 'HR',
+    copilot: 'GC',
   };
   return shorts[source];
 }
@@ -29,6 +31,7 @@ export function sourceHex(source: AgentSource): string {
     openclaw: '#8B5CF6',
     codex: '#10B981',
     hermes: '#EC4899',
+    copilot: '#0EA5E9',
   };
   return colors[source];
 }

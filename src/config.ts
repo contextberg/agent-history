@@ -5,9 +5,11 @@ import os from 'node:os';
 export interface AgentHistoryConfig {
   display: {
     showToolCalls: boolean;
+    showToolOutputs: boolean;
   };
   mcp: {
     includeToolCalls: boolean;
+    includeToolOutputs: boolean;
     maxSessions: number;
     maxTurnsPerSession: number;
     maxCharsPerField: number;
@@ -17,9 +19,11 @@ export interface AgentHistoryConfig {
 export const CONFIG_DEFAULTS: AgentHistoryConfig = {
   display: {
     showToolCalls: true,
+    showToolOutputs: true,
   },
   mcp: {
     includeToolCalls: true,
+    includeToolOutputs: false,
     maxSessions: 10,
     maxTurnsPerSession: 5,
     maxCharsPerField: 500,

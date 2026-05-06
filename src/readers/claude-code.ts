@@ -84,6 +84,7 @@ async function parseSession(
   // Ordered sequence of items within the current turn (text blocks and tool calls).
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
+  const pendingUseIndex = new Map<string, number>(); // tool_use_id -> pendingItems index
 
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -106,23 +107,34 @@ async function parseSession(
 
       if (type === 'user') {
         const contentVal = msg?.['content'];
-        // tool_result は配列になる → スキップ
+
+        // 配列形式の user は tool_result を含む。
+        // pendingUserMessage がある（=ツール実行後の結果メッセージ）なら結果を吸収。
+        // pendingUserMessage が無い場合は、テキスト混在パターンに対応してスキップ。
+        if (Array.isArray(contentVal)) {
+          if (pendingUserMessage !== null) {
+            absorbToolResults(contentVal, pendingItems, pendingUseIndex, maxChars);
+          }
+          continue;
+        }
         if (typeof contentVal !== 'string') continue;
 
         flushTurn(turns, pendingUserMessage, pendingItems, pendingTools, maxChars);
         pendingUserMessage = truncate(contentVal, maxChars);
         pendingItems.length = 0;
         pendingTools.clear();
+        pendingUseIndex.clear();
         if (!startedAt) startedAt = timestamp ?? new Date();
       } else if ((type === 'assistant' || msgRole === 'assistant') && pendingUserMessage !== null) {
         const contentVal = msg?.['content'];
         if (!Array.isArray(contentVal)) continue;
 
-        const { items, toolUses } = extractAssistantParts(contentVal);
+        const { items, toolUses, idIndex } = extractAssistantParts(contentVal, pendingItems.length);
         pendingItems.push(...items);
         for (const [name, count] of toolUses) {
           pendingTools.set(name, (pendingTools.get(name) ?? 0) + count);
         }
+        for (const [id, idx] of idIndex) pendingUseIndex.set(id, idx);
       }
     }
 
@@ -171,9 +183,11 @@ function flushTurn(
 
 function extractAssistantParts(
   contentArray: unknown[],
-): { items: AssistantItem[]; toolUses: Map<string, number> } {
+  baseOffset: number,
+): { items: AssistantItem[]; toolUses: Map<string, number>; idIndex: Map<string, number> } {
   const items: AssistantItem[] = [];
   const toolUses = new Map<string, number>();
+  const idIndex = new Map<string, number>();
 
   for (const item of contentArray) {
     if (!item || typeof item !== 'object') continue;
@@ -184,11 +198,48 @@ function extractAssistantParts(
       const name = typeof it['name'] === 'string' ? it['name'] : '?';
       const input = (it['input'] as Record<string, unknown>) ?? {};
       toolUses.set(name, (toolUses.get(name) ?? 0) + 1);
+      const id = typeof it['id'] === 'string' ? it['id'] : undefined;
+      const idx = baseOffset + items.length;
       items.push({ kind: 'tool', tool: { name, input } });
+      if (id) idIndex.set(id, idx);
     }
   }
 
-  return { items, toolUses };
+  return { items, toolUses, idIndex };
+}
+
+function absorbToolResults(
+  contentArray: unknown[],
+  pendingItems: AssistantItem[],
+  useIndex: Map<string, number>,
+  maxChars: number,
+): void {
+  for (const item of contentArray) {
+    if (!item || typeof item !== 'object') continue;
+    const it = item as Record<string, unknown>;
+    if (it['type'] !== 'tool_result') continue;
+    const id = typeof it['tool_use_id'] === 'string' ? it['tool_use_id'] : undefined;
+    if (!id) continue;
+    const idx = useIndex.get(id);
+    if (idx === undefined) continue;
+    const target = pendingItems[idx];
+    if (!target || target.kind !== 'tool') continue;
+    target.tool.output = truncate(stringifyToolResult(it['content']), maxChars);
+  }
+}
+
+function stringifyToolResult(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return JSON.stringify(content ?? '');
+  const parts: string[] = [];
+  for (const item of content) {
+    if (item && typeof item === 'object') {
+      const it = item as Record<string, unknown>;
+      if (typeof it['text'] === 'string') { parts.push(it['text']); continue; }
+    }
+    parts.push(JSON.stringify(item));
+  }
+  return parts.join('\n');
 }
 
 function parseTimestamp(val: unknown): Date | null {

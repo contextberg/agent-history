@@ -10,7 +10,7 @@ interface Props {
   query?: string;
 }
 
-const SOURCES: AgentSource[] = ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes'];
+const SOURCES: AgentSource[] = ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes', 'copilot'];
 
 const INSTALL_HINTS: Record<AgentSource, string> = {
   'claude-code': 'Install at claude.ai/code',
@@ -18,6 +18,7 @@ const INSTALL_HINTS: Record<AgentSource, string> = {
   openclaw: 'Install at openclaw.dev',
   codex: 'Install at github.com/openai/codex',
   hermes: 'Install at github.com/NousResearch/hermes-agent',
+  copilot: 'Install GitHub Copilot Chat in VS Code',
 };
 
 function relTime(iso: string): string {

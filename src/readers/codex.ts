@@ -77,6 +77,7 @@ async function parseSession(
   let pendingUserMessage: string | null = null;
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
+  const pendingCallIndex = new Map<string, number>(); // call_id -> pendingItems index
   const turns: AgentTurn[] = [];
 
   function flushTurn(): void {
@@ -102,6 +103,7 @@ async function parseSession(
     pendingUserMessage = null;
     pendingItems.length = 0;
     pendingTools.clear();
+    pendingCallIndex.clear();
   }
 
   try {
@@ -173,7 +175,24 @@ async function parseSession(
           input = argsRaw as Record<string, unknown>;
         }
         pendingTools.set(name, (pendingTools.get(name) ?? 0) + 1);
+        const callId = payload['call_id'] as string | undefined;
+        const idx = pendingItems.length;
         pendingItems.push({ kind: 'tool', tool: { name, input } });
+        if (callId) pendingCallIndex.set(callId, idx);
+        continue;
+      }
+
+      // Tool result (function_call_output)
+      if (itemType === 'function_call_output' && pendingUserMessage !== null) {
+        const callId = payload['call_id'] as string | undefined;
+        if (!callId) continue;
+        const idx = pendingCallIndex.get(callId);
+        if (idx === undefined) continue;
+        const target = pendingItems[idx];
+        if (!target || target.kind !== 'tool') continue;
+        const out = payload['output'];
+        const outStr = typeof out === 'string' ? out : JSON.stringify(out ?? '');
+        target.tool.output = truncate(outStr, maxChars);
       }
     }
 

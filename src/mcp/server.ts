@@ -28,7 +28,7 @@ export async function startMcpServer(): Promise<void> {
           properties: {
             source: {
               type: 'string',
-              enum: ['claude-code', 'cursor', 'openclaw'],
+              enum: ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes', 'copilot'],
               description: 'Filter by tool. Omit to get all sources.',
             },
             date: {
@@ -51,6 +51,10 @@ export async function startMcpServer(): Promise<void> {
               type: 'boolean',
               description: 'Include tool call names in assistant summaries. Overrides user default.',
             },
+            includeToolOutputs: {
+              type: 'boolean',
+              description: 'Include tool result outputs (truncated). Off by default to keep payloads small.',
+            },
           },
         },
       },
@@ -72,6 +76,7 @@ export async function startMcpServer(): Promise<void> {
     const maxTurnsPerSession = Math.min(Number(input['maxTurnsPerSession'] ?? d.maxTurnsPerSession), 20);
     const maxCharsPerField = Math.min(Number(input['maxCharsPerField'] ?? d.maxCharsPerField), 2000);
     const includeToolCalls = (input['includeToolCalls'] as boolean | undefined) ?? d.includeToolCalls;
+    const includeToolOutputs = (input['includeToolOutputs'] as boolean | undefined) ?? d.includeToolOutputs;
 
     try {
       const source = input['source'] as AgentSource | undefined;
@@ -109,6 +114,14 @@ export async function startMcpServer(): Promise<void> {
             lines.push(`A: ${textItems.slice(0, maxCharsPerField)}${toolSuffix ?? ''}`);
           } else if (turn.assistantSummary) {
             lines.push(`A: ${turn.assistantSummary}`);
+          }
+
+          if (includeToolOutputs) {
+            for (const item of turn.items ?? []) {
+              if (item.kind !== 'tool' || !item.tool.output) continue;
+              const out = item.tool.output.slice(0, maxCharsPerField);
+              lines.push(`  → ${item.tool.name}: ${out}`);
+            }
           }
         }
         lines.push('');
