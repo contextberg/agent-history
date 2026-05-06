@@ -3,15 +3,18 @@ import type { AgentSession, AssistantItem, ToolCall } from '../types';
 import type { TranscriptStyle, ToolStyle, Density } from '../hooks/useViewSettings';
 import { sourceLabel, sourceHex, sourceShort } from '../utils/source';
 import { CopyButton } from './CopyButton';
-import { buildMarkdown, buildContext, buildRaw } from '../utils/copy';
+import { buildMarkdown } from '../utils/copy';
 
 interface Props {
   session: AgentSession;
   showToolCalls?: boolean;
+  showToolOutputs?: boolean;
   transcriptStyle?: TranscriptStyle;
   toolStyle?: ToolStyle;
   density?: Density;
 }
+
+const ShowToolOutputsContext = React.createContext(false);
 
 /* ── Helpers ── */
 
@@ -67,6 +70,7 @@ function ToolOutput({ output }: { output: string }) {
 function ToolCallCollapse({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false);
   const preview = getPreview(call);
+  const showOutput = React.useContext(ShowToolOutputsContext);
   return (
     <div style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border-main)', background: 'var(--bg-card)' }}>
       <button
@@ -98,7 +102,7 @@ function ToolCallCollapse({ call }: { call: ToolCall }) {
           <pre className="font-mono" style={{ margin: 0, fontSize: 10.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
             {JSON.stringify(call.input, null, 2)}
           </pre>
-          {call.output && <ToolOutput output={call.output} />}
+          {showOutput && call.output && <ToolOutput output={call.output} />}
         </div>
       )}
     </div>
@@ -139,6 +143,7 @@ function ToolCallGutter({ call }: { call: ToolCall }) {
 function ToolCallCard({ call }: { call: ToolCall }) {
   const preview = getPreview(call);
   const path = (call.input['file_path'] ?? call.input['path']) as string | undefined;
+  const showOutput = React.useContext(ShowToolOutputsContext);
   return (
     <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border-main)', background: 'var(--bg-panel)', boxShadow: 'var(--shadow-card)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -158,7 +163,7 @@ function ToolCallCard({ call }: { call: ToolCall }) {
         <pre className="font-mono" style={{ margin: 0, fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
           {preview || JSON.stringify(call.input)}
         </pre>
-        {call.output && <ToolOutput output={call.output} />}
+        {showOutput && call.output && <ToolOutput output={call.output} />}
       </div>
     </div>
   );
@@ -307,9 +312,7 @@ function SessionHeader({ session }: { session: AgentSession }) {
         </div>
       </div>
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-        <CopyButton label="Markdown" getValue={() => buildMarkdown(session)} />
-        <CopyButton label="Context" getValue={() => buildContext(session)} />
-        <CopyButton label="Raw JSON" getValue={() => buildRaw(session)} />
+        <CopyButton label="Copy" getValue={() => buildMarkdown(session)} />
       </div>
     </header>
   );
@@ -456,24 +459,27 @@ function TranscriptDocument({ session, toolStyle, showToolCalls }: { session: Ag
 export function SessionView({
   session,
   showToolCalls = true,
+  showToolOutputs = false,
   transcriptStyle = 'transcript',
   toolStyle = 'collapse',
   density = 'cozy',
 }: Props) {
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <SessionHeader session={session} />
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {transcriptStyle === 'chat' && (
-          <TranscriptChat session={session} toolStyle={toolStyle} showToolCalls={showToolCalls} density={density} />
-        )}
-        {transcriptStyle === 'document' && (
-          <TranscriptDocument session={session} toolStyle={toolStyle} showToolCalls={showToolCalls} />
-        )}
-        {transcriptStyle === 'transcript' && (
-          <TranscriptDefault session={session} toolStyle={toolStyle} showToolCalls={showToolCalls} />
-        )}
+    <ShowToolOutputsContext.Provider value={showToolOutputs}>
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <SessionHeader session={session} />
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {transcriptStyle === 'chat' && (
+            <TranscriptChat session={session} toolStyle={toolStyle} showToolCalls={showToolCalls} density={density} />
+          )}
+          {transcriptStyle === 'document' && (
+            <TranscriptDocument session={session} toolStyle={toolStyle} showToolCalls={showToolCalls} />
+          )}
+          {transcriptStyle === 'transcript' && (
+            <TranscriptDefault session={session} toolStyle={toolStyle} showToolCalls={showToolCalls} />
+          )}
+        </div>
       </div>
-    </div>
+    </ShowToolOutputsContext.Provider>
   );
 }

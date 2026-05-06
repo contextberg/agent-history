@@ -131,10 +131,11 @@ function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: b
         />
 
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6, marginBottom: 2 }}>
+          {/* Row 1: title + time */}
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
             <span
               style={{
-                fontSize: 12.5,
+                fontSize: 13,
                 fontWeight: 600,
                 color: 'var(--text-primary)',
                 letterSpacing: '-0.005em',
@@ -149,21 +150,27 @@ function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: b
               {relTime(s.startedAt)}
             </span>
           </div>
-          <p
-            className="clamp-2"
-            style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}
-          >
-            {highlight(preview, query)}
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
-            <span style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color }}>
+
+          {/* Row 2: agent name + turns */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3 }}>
+            <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color }}>
               {sourceLabel(s.source)}
             </span>
-            <span style={{ width: 2, height: 2, borderRadius: 999, backgroundColor: 'var(--text-tertiary)', flexShrink: 0 }} />
+            <span style={{ width: 2, height: 2, borderRadius: 999, backgroundColor: 'var(--text-quaternary)', flexShrink: 0 }} />
             <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
               {s.turns.length} {s.turns.length === 1 ? 'turn' : 'turns'}
             </span>
           </div>
+
+          {/* Row 3: preview */}
+          {preview && (
+            <p
+              className="clamp-2"
+              style={{ margin: '5px 0 0', fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}
+            >
+              {highlight(preview, query)}
+            </p>
+          )}
         </div>
       </button>
     </li>

@@ -19,7 +19,7 @@ export interface AgentHistoryConfig {
 export const CONFIG_DEFAULTS: AgentHistoryConfig = {
   display: {
     showToolCalls: true,
-    showToolOutputs: true,
+    showToolOutputs: false,
   },
   mcp: {
     includeToolCalls: true,

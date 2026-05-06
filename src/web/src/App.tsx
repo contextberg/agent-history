@@ -209,22 +209,38 @@ export function App() {
         <header className="px-4 pt-4 pb-3" style={{ borderBottom: '1px solid var(--border-main)' }}>
 
           {/* Brand + theme toggle */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div
-                className="w-[22px] h-[22px] rounded-md flex items-center justify-center"
+          <div className="flex items-center justify-between mb-3.5">
+            <div className="flex items-center gap-2.5">
+              <img
+                src="/favicon.svg"
+                alt="Contextberg"
+                width={26}
+                height={26}
                 style={{
-                  backgroundColor: 'var(--accent)',
-                  boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.1)',
+                  display: 'block',
+                  filter: 'drop-shadow(0 1px 2px rgba(15, 71, 120, 0.25))',
                 }}
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 8v4l2 2" /><circle cx="12" cy="12" r="9" />
-                </svg>
+              />
+              <div className="flex flex-col" style={{ lineHeight: 1.05 }}>
+                <h1
+                  className="text-[14px] font-semibold tracking-[-0.012em]"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  agent<span style={{ color: 'var(--accent)' }}>·</span>history
+                </h1>
+                <span
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 600,
+                    letterSpacing: '0.14em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-tertiary)',
+                    marginTop: 2,
+                  }}
+                >
+                  Contextberg
+                </span>
               </div>
-              <h1 className="text-[13.5px] font-semibold tracking-[-0.01em]" style={{ color: 'var(--text-primary)' }}>
-                agent<span style={{ color: 'var(--text-tertiary)' }}>·</span>history
-              </h1>
             </div>
             <div className="flex items-center gap-1">
               <ThemeToggle />
@@ -385,6 +401,7 @@ export function App() {
           <SessionView
             session={selected}
             showToolCalls={settings.display.showToolCalls}
+            showToolOutputs={settings.display.showToolOutputs}
             transcriptStyle={viewSettings.transcriptStyle}
             toolStyle={viewSettings.toolStyle}
             density={viewSettings.density}

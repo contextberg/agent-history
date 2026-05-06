@@ -3,9 +3,11 @@ import { useState, useEffect } from 'react';
 export interface AppSettings {
   display: {
     showToolCalls: boolean;
+    showToolOutputs: boolean;
   };
   mcp: {
     includeToolCalls: boolean;
+    includeToolOutputs: boolean;
     maxSessions: number;
     maxTurnsPerSession: number;
     maxCharsPerField: number;
@@ -13,9 +15,10 @@ export interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
-  display: { showToolCalls: true },
+  display: { showToolCalls: true, showToolOutputs: false },
   mcp: {
     includeToolCalls: true,
+    includeToolOutputs: false,
     maxSessions: 10,
     maxTurnsPerSession: 5,
     maxCharsPerField: 500,

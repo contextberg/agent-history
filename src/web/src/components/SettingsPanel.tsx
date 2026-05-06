@@ -25,6 +25,13 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
           onChange={(v) => onUpdate({ display: { ...settings.display, showToolCalls: v } })}
         />
 
+        <Toggle
+          label="Show tool outputs"
+          description="Off by default — outputs are often large dumps (file contents, command stdout) and reflect the environment at the time, which may now be stale. Turn on when you need the actual result text."
+          value={settings.display.showToolOutputs}
+          onChange={(v) => onUpdate({ display: { ...settings.display, showToolOutputs: v } })}
+        />
+
         {/* Transcript style */}
         <SelectRow
           label="Transcript"
@@ -102,6 +109,12 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
             value={settings.mcp.includeToolCalls}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, includeToolCalls: v } })}
           />
+          <Toggle
+            label="Include tool outputs"
+            description="Off by default — tool outputs can be very large and consume MCP token budget. The next agent can re-run the tool if it needs the actual data."
+            value={settings.mcp.includeToolOutputs}
+            onChange={(v) => onUpdate({ mcp: { ...settings.mcp, includeToolOutputs: v } })}
+          />
           <NumberInput label="Max sessions" value={settings.mcp.maxSessions} min={1} max={50}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxSessions: v } })} />
           <NumberInput label="Max turns per session" value={settings.mcp.maxTurnsPerSession} min={1} max={20}
@@ -163,7 +176,7 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h2 style={{ margin: '0 0 10px', fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+    <h2 style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-primary)' }}>
       {children}
     </h2>
   );
