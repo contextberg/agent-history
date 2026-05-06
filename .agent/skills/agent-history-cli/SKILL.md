@@ -1,6 +1,6 @@
 ---
 name: agent-history-cli
-description: Use the @contextberg/agent-history CLI and MCP server to browse, retrieve, or summarize local AI coding-agent transcripts from Claude Code, Cursor, OpenClaw, Codex, Hermes, and GitHub Copilot. Use when a user asks to inspect agent history, find prior coding-agent conversations, launch the agent-history browser UI, configure agent-history as an MCP server, or call the get_agent_history MCP tool from an agent client.
+description: Use the @contextberg/agent-history CLI and MCP server to retrieve prior coding-agent session history and hand off context to another agent or application. PRIMARY USE CASE — call get_agent_history via MCP to load what was already built or discussed in a previous session so the current agent can continue work seamlessly. Also use when a user asks to inspect agent history, browse prior conversations, launch the agent-history browser UI, configure agent-history as an MCP server, or summarize recent coding activity across Claude Code, Cursor, OpenClaw, Codex, Hermes, and GitHub Copilot.
 ---
 
 # Agent History CLI
@@ -15,6 +15,26 @@ Use `agent-history` to read local coding-agent transcripts through either a brow
 - For an agent client that needs history in context: configure the MCP server with `npx -y @contextberg/agent-history --mcp`.
 - For local repo verification: run `npm run build`, then `node dist/cli.js` or `node dist/cli.js --mcp`.
 - Avoid starting the browser UI unless the user asked for it; the CLI opens a browser window automatically.
+
+## Context Handoff Pattern
+
+The primary purpose of `get_agent_history` is to continue work across agent sessions. A typical workflow:
+
+1. A new Claude Code session starts without context of what was done previously.
+2. Call `get_agent_history` with the relevant `source` and `date` to retrieve the prior session's turns.
+3. The response includes the full conversation — user requests, assistant replies with code blocks intact, and tool-call traces — which the new agent can use to understand what was already built and what remains to do.
+
+To retrieve just the most recent session and pick up where it left off:
+
+```json
+{
+  "source": "claude-code",
+  "maxSessions": 1,
+  "maxTurnsPerSession": 20,
+  "maxCharsPerField": 2000,
+  "includeToolCalls": true
+}
+```
 
 ## Commands
 
@@ -79,8 +99,10 @@ Supported arguments:
 - `maxSessions`: capped at `50`; default is `10`.
 - `maxTurnsPerSession`: capped at `20`; default is `5`.
 - `maxCharsPerField`: capped at `2000`; default is `500`.
-- `includeToolCalls`: include tool call names in assistant summaries; default is `true`.
-- `includeToolOutputs`: include truncated tool result output; default is `false`.
+- `includeToolCalls`: show tool call names used per turn; default is `true`.
+- `includeToolOutputs`: include truncated tool result output wrapped in code fences; default is `false`.
+
+The response format is structured markdown: each session has a `###` header with source, project, timestamp, cwd, and branch. Each turn has labeled `User:` and `Assistant:` sections with code blocks preserved as-is. Tool outputs, when included, are wrapped in ` ``` ` fences.
 
 Example request:
 
