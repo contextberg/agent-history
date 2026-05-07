@@ -75,6 +75,7 @@ async function parseSession(
   let startedAt: Date | null = null;
   let endedAt: Date | null = null;
   let cwd: string | undefined;
+  let entrypoint: string | undefined;
 
   let pendingUserMessage: string | null = null;
   const pendingItems: AssistantItem[] = [];
@@ -138,6 +139,8 @@ async function parseSession(
           cwd = c;
           project = path.basename(c.replace(/[/\\]+$/, '')) || project;
         }
+        const orig = payload['originator'] as string | undefined;
+        if (orig) entrypoint = orig;
         const ts = payload['timestamp'] as string | undefined;
         if (ts) {
           const d = new Date(ts);
@@ -241,6 +244,7 @@ async function parseSession(
   };
   if (cwd) session.cwd = cwd;
   if (endedAt) session.endedAt = endedAt;
+  if (entrypoint) session.entrypoint = entrypoint;
   return session;
 }
 

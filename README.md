@@ -1,42 +1,42 @@
 # @contextberg/agent-history
 
-**AIコーディングエージェントの会話履歴を、ひとつの場所で読み返す。**
+**Review all your AI coding agent conversation histories in one place.**
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 [![npm](https://img.shields.io/npm/v/@contextberg/agent-history)](https://www.npmjs.com/package/@contextberg/agent-history)
 
-Claude Code、Cursor、Codex などのAIコーディングエージェントは、会話のたびにローカルのJSONLファイルやSQLiteへ履歴を書き出している。そのデータには、バグの原因を掘り下げた推論、設計の判断過程、エラーからの復帰ログが詰まっている。しかしツールをまたいで参照する手段がなく、ほとんどの履歴は読まれることなく眠り続ける。
+AI coding agents like Claude Code, Cursor, and Codex write history to local JSONL files or SQLite databases after every conversation. These logs are packed with reasoning for bug hunting, architectural decision-making, and error recovery logs. However, without a cross-tool way to reference them, most histories lie dormant and unread.
 
-`@contextberg/agent-history` はブラウザUIとMCPサーバーの二つのかたちで、その履歴を取り戻す。
-
----
-
-<!-- TODO: スクリーンショット（左: セッション一覧＋ソースフィルター、右: 会話詳細＋ツールコール展開） -->
+`@contextberg/agent-history` reclaims that history via both a browser-based UI and an MCP server.
 
 ---
 
-## 対応ツール
+<!-- TODO: Screenshots (Left: Session list + Source filter, Right: Conversation details + Expanded tool calls) -->
 
-| ツール | 読み取り元 |
-|--------|-----------|
+---
+
+## Supported Tools
+
+| Tool | Source |
+|------|--------|
 | Claude Code | `~/.claude/projects/**/*.jsonl` |
 | Cursor | `~/.cursor/projects/` |
 | OpenClaw | `~/.openclaw/agents/` |
 | Codex | `~/.codex/sessions/` |
 | Hermes | `~/.hermes/state.db` |
-| GitHub Copilot | 🚧 コントリビューション歓迎 |
+| GitHub Copilot | 🚧 Contributions Welcome |
 
 ---
 
-## クイックスタート
+## Quick Start
 
 ```bash
 npx @contextberg/agent-history
 ```
 
-ブラウザが自動で開く。インストール不要。
+The browser will open automatically. No installation required.
 
-**グローバルインストールする場合：**
+**To install globally:**
 
 ```bash
 npm install -g @contextberg/agent-history
@@ -45,9 +45,9 @@ agent-history
 
 ---
 
-## MCPサーバーとして使う
+## Using as an MCP Server
 
-Claude Desktop などの設定ファイルに追加する：
+Add it to your configuration file (e.g., Claude Desktop):
 
 ```json
 {
@@ -60,33 +60,32 @@ Claude Desktop などの設定ファイルに追加する：
 }
 ```
 
-設定後、エージェントから `get_agent_history` ツールを呼び出すことで過去セッションの内容をコンテキストに取り込める。
+Once configured, you can bring past session content into your agent's context by calling the `get_agent_history` tool.
 
 ---
 
-## ロードマップ
+## Roadmap
 
 coming soon
 
 ---
 
-## コントリビュート
+## Contributing
 
-コントリビューションを歓迎します。新しいエージェントツールの対応追加が最も典型的なコントリビューションの形です。
+Contributions are welcome! Adding support for new agent tools is the most common way to contribute.
 
-**クイックスタート：**
+**Quick Start:**
 
 ```bash
 git clone https://github.com/contextberg/agent-history
 cd agent-history
 npm install
-npm run dev:server   # Fastify on 127.0.0.1:3847
-npm run dev:web      # Vite on :5173, /api をプロキシ
+npm run dev          # Starts API server (3847) + Vite (5173) simultaneously → opens http://localhost:5173
 ```
 
-**新しいツールを追加する：**
+**Adding a new tool:**
 
-`IReader` インターフェースを実装したファイルを1つ作り、3箇所に登録するだけです。
+Simply implement the `IReader` interface in a new file and register it in three places.
 
 ```typescript
 export interface IReader {
@@ -96,15 +95,15 @@ export interface IReader {
 }
 ```
 
-1. `src/readers/<toolname>.ts` を作成して `IReader` を実装
-2. `AgentSource` 型に追加（`src/readers/types.ts`）
-3. `AgentHistoryService` のリーダーリストに登録（`src/readers/index.ts`）
-4. MCPスキーマの enum に追加（`src/mcp/server.ts`）
+1. Create `src/readers/<toolname>.ts` and implement `IReader`.
+2. Add to the `AgentSource` type (`src/readers/types.ts`).
+3. Register in the reader list of `AgentHistoryService` (`src/readers/index.ts`).
+4. Add to the MCP schema enum (`src/mcp/server.ts`).
 
-ソース固有のロジックはすべてリーダー層の中にとどめること。
+Keep all source-specific logic strictly within the reader layer.
 
 ---
 
-## ライセンス
+## License
 
 MIT — see [LICENSE](./LICENSE). Built by [Contextberg](https://contextberg.com).

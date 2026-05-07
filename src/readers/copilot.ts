@@ -38,7 +38,13 @@ export class CopilotReader implements IReader {
     const maxTurns = options.maxTurnsPerSession ?? DEFAULTS.maxTurns;
     const maxChars = options.maxCharsPerField ?? DEFAULTS.maxChars;
 
-    const candidates: { fp: string; mtime: Date; project: string; format: 'jsonl' | 'json' }[] = [];
+    const candidates: {
+      fp: string;
+      mtime: Date;
+      project: string;
+      cwd: string | null;
+      format: 'jsonl' | 'json';
+    }[] = [];
 
     for (const userDir of vscodeUserDirs()) {
       // Workspace sessions: workspaceStorage/<hash>/chatSessions/*.jsonl
@@ -49,7 +55,7 @@ export class CopilotReader implements IReader {
         const wsDir = path.join(wsRoot, entry.name);
         const sessionsDir = path.join(wsDir, 'chatSessions');
         if (!(await exists(sessionsDir))) continue;
-        const project = await readWorkspaceProject(wsDir);
+        const ws = await readWorkspace(wsDir);
         const files = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
         for (const f of files) {
           if (!f.isFile()) continue;
@@ -59,7 +65,13 @@ export class CopilotReader implements IReader {
           const fp = path.join(sessionsDir, f.name);
           const stat = await fs.stat(fp).catch(() => null);
           if (!stat) continue;
-          candidates.push({ fp, mtime: stat.mtime, project, format: isJsonl ? 'jsonl' : 'json' });
+          candidates.push({
+            fp,
+            mtime: stat.mtime,
+            project: ws.name,
+            cwd: ws.cwd,
+            format: isJsonl ? 'jsonl' : 'json',
+          });
         }
       }
 
@@ -71,7 +83,7 @@ export class CopilotReader implements IReader {
         const fp = path.join(emptyDir, f.name);
         const stat = await fs.stat(fp).catch(() => null);
         if (!stat) continue;
-        candidates.push({ fp, mtime: stat.mtime, project: '(no workspace)', format: 'json' });
+        candidates.push({ fp, mtime: stat.mtime, project: '(no workspace)', cwd: null, format: 'json' });
       }
     }
 
@@ -87,7 +99,9 @@ export class CopilotReader implements IReader {
         : await loadJsonSession(c.fp);
       if (!state) continue;
       const session = buildSession(state, c.project, c.mtime, maxTurns, maxChars);
-      if (session) sessions.push(session);
+      if (!session) continue;
+      if (c.cwd) session.cwd = c.cwd;
+      sessions.push(session);
     }
 
     return sessions
@@ -113,18 +127,36 @@ function vscodeUserDirs(): string[] {
   return dirs;
 }
 
-async function readWorkspaceProject(wsDir: string): Promise<string> {
+/**
+ * Read the workspace's folder URI from `workspace.json` and return both the
+ * display name (basename) and an absolute cwd. The cwd lets the linkage layer
+ * place copilot sessions in their repo via channel 1, parallel to cursor.
+ */
+async function readWorkspace(wsDir: string): Promise<{ name: string; cwd: string | null }> {
   try {
     const raw = await fs.readFile(path.join(wsDir, 'workspace.json'), 'utf-8');
     const parsed = JSON.parse(raw) as { folder?: string; configuration?: string };
     const uri = parsed.folder ?? parsed.configuration;
     if (typeof uri === 'string') {
-      const decoded = decodeURIComponent(uri.replace(/^file:\/\//, ''));
-      const basename = path.basename(decoded.replace(/[/\\]+$/, ''));
-      if (basename) return basename;
+      const cwd = fileUriToPath(uri);
+      const trimmed = (cwd ?? decodeURIComponent(uri.replace(/^file:\/\//, '')))
+        .replace(/[/\\]+$/, '');
+      const name = path.basename(trimmed) || path.basename(wsDir);
+      return { name, cwd };
     }
   } catch { /* ignore */ }
-  return path.basename(wsDir);
+  return { name: path.basename(wsDir), cwd: null };
+}
+
+/**
+ * Convert a `file://` URI to a platform-absolute path. Handles Windows drive
+ * encoding (`file:///c%3A/...` → `C:\...`).
+ */
+function fileUriToPath(uri: string): string | null {
+  if (!uri.startsWith('file://')) return null;
+  let p = decodeURIComponent(uri.slice('file://'.length));
+  if (process.platform === 'win32' && /^\/[a-z]:/i.test(p)) p = p.slice(1);
+  return path.normalize(p);
 }
 
 async function loadJsonlSession(filePath: string): Promise<CopilotState | null> {

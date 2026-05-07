@@ -5,7 +5,7 @@ Product context and user-facing documentation live in `README.md`. This file cov
 ## Architecture
 
 ```
-src/cli.ts               # entry: --mcp → MCP stdio, default → web server + open browser
+src/cli.ts               # entry: --mcp → MCP stdio, --dev → API only (Vite handles UI), default → web server + open browser
 src/config.ts            # ~/.agent-history/config.json — persisted defaults
 src/readers/
   types.ts               # AgentSession / AgentTurn / IReader / ReaderOptions

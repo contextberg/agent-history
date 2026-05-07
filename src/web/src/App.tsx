@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentSession, AgentSource } from './types';
-import { fetchSessions, fetchStatus } from './api';
+import type { AgentSession, AgentSource, CommitWithLinks } from './types';
+import { fetchCommits, fetchSessions, fetchStatus } from './api';
 import { SessionList } from './components/SessionList';
 import { SessionView } from './components/SessionView';
 import { SourceFilter } from './components/SourceFilter';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ThemeToggle } from './components/ThemeToggle';
+import { CommitList } from './components/CommitList';
+import { CommitView } from './components/CommitView';
 import { useSettings } from './hooks/useSettings';
 import {
   useViewSettings,
@@ -14,6 +16,11 @@ import {
 } from './hooks/useViewSettings';
 
 type SidebarTab = 'sessions' | 'settings';
+type GroupMode = 'time' | 'commit';
+type Selection =
+  | { kind: 'session'; session: AgentSession }
+  | { kind: 'commit'; commit: CommitWithLinks }
+  | null;
 
 function searchSessions(sessions: AgentSession[], query: string): AgentSession[] {
   const q = query.toLowerCase().trim();
@@ -38,12 +45,19 @@ function searchSessions(sessions: AgentSession[], query: string): AgentSession[]
 
 export function App() {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
-  const [selected, setSelected] = useState<AgentSession | null>(null);
+  const [commits, setCommits] = useState<CommitWithLinks[]>([]);
+  const [commitsLoading, setCommitsLoading] = useState(false);
+  const [groupMode, setGroupMode] = useState<GroupMode>('time');
+  const [selected, setSelected] = useState<Selection>(null);
   const [source, setSource] = useState<AgentSource | undefined>(undefined);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<Record<AgentSource, boolean> | undefined>(undefined);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('sessions');
+  const selectedSession = selected?.kind === 'session' ? selected.session : null;
+  const selectedSha = selected?.kind === 'commit' ? selected.commit.sha : undefined;
+  const selectSession = (s: AgentSession) => setSelected({ kind: 'session', session: s });
+  const selectCommit = (c: CommitWithLinks) => setSelected({ kind: 'commit', commit: c });
   const { settings, update: updateSettings } = useSettings();
   const { settings: viewSettings, update: updateView } = useViewSettings();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -90,7 +104,10 @@ export function App() {
           if (cancelled) return;
           setSessions(data);
           setStatus(stat);
-          setSelected((cur) => cur ?? (data.length > 0 ? data[0] : null));
+          setSelected((cur) => {
+            if (cur) return cur;
+            return data.length > 0 ? { kind: 'session', session: data[0]! } : null;
+          });
         })
         .catch((err) => console.error('Failed to fetch sessions:', err))
         .finally(() => { if (!cancelled && showSpinner) setLoading(false); });
@@ -111,10 +128,50 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
+  const [commitsError, setCommitsError] = useState<string | null>(null);
+
+  // Lazy-fetch commits the first time the user switches to commit mode, then
+  // refresh every 30s while it's the active mode. Fail-soft on errors — the
+  // existing session list view stays useful regardless.
+  useEffect(() => {
+    if (groupMode !== 'commit') return;
+    let cancelled = false;
+    let interval: number | undefined;
+    const refresh = (showSpinner: boolean) => {
+      if (showSpinner && commits.length === 0) setCommitsLoading(true);
+      fetchCommits()
+        .then((data) => {
+          if (cancelled) return;
+          setCommits(data);
+          setCommitsError(null);
+        })
+        .catch((err) => {
+          console.error('Failed to fetch commits:', err);
+          if (!cancelled) setCommitsError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => { if (!cancelled) setCommitsLoading(false); });
+    };
+    refresh(true);
+    interval = window.setInterval(() => refresh(false), 30_000);
+    return () => { cancelled = true; if (interval) window.clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupMode]);
+
   const filteredSessions = useMemo(
     () => (query.trim() ? searchSessions(sessions, query) : sessions),
     [sessions, query],
   );
+
+  // Apply the source filter to commit data too — when the user picks "cursor"
+  // they want commits where cursor contributed, with non-cursor links hidden
+  // inside each row. We map then filter so the strong/weak counts in
+  // CommitList and the link groups in CommitView all see consistent data.
+  const filteredCommits = useMemo(() => {
+    if (!source) return commits;
+    return commits
+      .map((c) => ({ ...c, links: c.links.filter((l) => l.session.source === source) }))
+      .filter((c) => c.links.length > 0);
+  }, [commits, source]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -137,13 +194,19 @@ export function App() {
       if (e.key === 't' || e.key === 'T') {
         updateSettings({ display: { showToolCalls: !settings.display.showToolCalls } });
       }
+      // j/k navigate the session list when a session is selected. In commit
+      // mode they're a no-op for now — keyboard nav for commits is a future polish.
       if (e.key === 'j' || e.key === 'J') {
-        const idx = selected ? filteredSessions.findIndex((s) => s.id === selected.id) : -1;
-        if (idx < filteredSessions.length - 1) setSelected(filteredSessions[idx + 1]);
+        const cur = selectedSession;
+        const idx = cur ? filteredSessions.findIndex((s) => s.id === cur.id) : -1;
+        const next = filteredSessions[idx + 1];
+        if (next && idx < filteredSessions.length - 1) selectSession(next);
       }
       if (e.key === 'k' || e.key === 'K') {
-        const idx = selected ? filteredSessions.findIndex((s) => s.id === selected.id) : 0;
-        if (idx > 0) setSelected(filteredSessions[idx - 1]);
+        const cur = selectedSession;
+        const idx = cur ? filteredSessions.findIndex((s) => s.id === cur.id) : 0;
+        const prev = filteredSessions[idx - 1];
+        if (prev && idx > 0) selectSession(prev);
       }
       if (e.key === '[') {
         updateView('sidebarOpen', !viewSettings.sidebarOpen);
@@ -151,7 +214,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [filteredSessions, selected, settings.display.showToolCalls, updateSettings, updateView, viewSettings.sidebarOpen]);
+  }, [filteredSessions, selectedSession, settings.display.showToolCalls, updateSettings, updateView, viewSettings.sidebarOpen]);
 
   return (
     <div
@@ -325,27 +388,65 @@ export function App() {
           </div>
 
           {sidebarTab === 'sessions' && (
-            <div className="mt-2.5">
-              <SourceFilter value={source} onChange={setSource} />
-            </div>
+            <>
+              <div className="mt-2.5">
+                <SourceFilter value={source} onChange={setSource} />
+              </div>
+              <div
+                className="mt-2.5 flex gap-0.5 p-[3px] rounded-lg"
+                style={{ backgroundColor: 'var(--bg-inset)' }}
+              >
+                {(['time', 'commit'] as GroupMode[]).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setGroupMode(m)}
+                    className="flex-1 text-[10.5px] font-semibold capitalize py-[4px] rounded-md transition-colors"
+                    style={{
+                      backgroundColor: groupMode === m ? 'var(--bg-panel)' : 'transparent',
+                      color: groupMode === m ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      boxShadow: groupMode === m ? 'var(--shadow-card)' : 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                    title={m === 'time' ? 'Group sessions by time' : 'Group sessions under their commits'}
+                  >
+                    {m === 'time' ? 'By time' : 'By commit'}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
         </header>
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
           {sidebarTab === 'sessions' ? (
-            loading ? (
+            (loading || (groupMode === 'commit' && commitsLoading && commits.length === 0)) ? (
               <div className="flex items-center justify-center h-32">
                 <div
                   className="w-4 h-4 rounded-full border-2 animate-spin"
                   style={{ borderColor: 'var(--border-main)', borderTopColor: 'var(--accent)' }}
                 />
               </div>
+            ) : groupMode === 'commit' ? (
+              commitsError ? (
+                <div style={{ padding: '24px 16px', color: 'var(--text-tertiary)', fontSize: 12 }}>
+                  Failed to load commits: {commitsError}
+                </div>
+              ) : (
+                <CommitList
+                  commits={filteredCommits}
+                  sessionCount={sessions.length}
+                  selectedSha={selectedSha}
+                  onSelect={selectCommit}
+                />
+              )
             ) : (
               <SessionList
                 sessions={filteredSessions}
-                selectedId={selected?.id}
-                onSelect={setSelected}
+                selectedId={selectedSession?.id}
+                onSelect={selectSession}
                 status={status}
                 query={query}
               />
@@ -397,14 +498,27 @@ export function App() {
 
       {/* Main */}
       <main className="flex-1 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-app)' }}>
-        {selected ? (
+        {selected?.kind === 'session' ? (
           <SessionView
-            session={selected}
+            session={selected.session}
             showToolCalls={settings.display.showToolCalls}
             showToolOutputs={settings.display.showToolOutputs}
             transcriptStyle={viewSettings.transcriptStyle}
             toolStyle={viewSettings.toolStyle}
             density={viewSettings.density}
+          />
+        ) : selected?.kind === 'commit' ? (
+          <CommitView
+            commit={
+              // When the source filter is on, render the filtered commit
+              // (links narrowed to that source) so the detail view matches
+              // what the sidebar shows. If the selected commit no longer has
+              // any links under the filter, fall back to the unfiltered
+              // commit — the user can still see "0 links match this filter".
+              filteredCommits.find((c) => c.sha === selected.commit.sha) ?? selected.commit
+            }
+            sessions={sessions}
+            onSelectSession={selectSession}
           />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-3">
@@ -417,7 +531,7 @@ export function App() {
               </svg>
             </div>
             <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>
-              セッションを選択してトランスクリプトを表示
+              {groupMode === 'commit' ? 'コミットを選択' : 'セッションを選択してトランスクリプトを表示'}
             </p>
           </div>
         )}

@@ -1,141 +1,201 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { AgentHistoryService } from '../readers/index.js';
 import type { AgentSource } from '../readers/index.js';
 import { loadConfig, CONFIG_DEFAULTS } from '../config.js';
 
 const service = new AgentHistoryService();
 
+const GetAgentHistorySchema = z.object({
+  source: z.enum(['claude-code', 'cursor', 'openclaw', 'codex', 'hermes', 'copilot'])
+    .optional()
+    .describe('Filter by agent tool. Omit to get sessions from all sources.'),
+  date: z.string()
+    .optional()
+    .describe('ISO date string (e.g. "2026-05-06"). Omit to search all history.'),
+  maxSessions: z.number().int().min(1).max(50)
+    .optional()
+    .describe(`Max sessions to return (hard cap: 50). Default: ${CONFIG_DEFAULTS.mcp.maxSessions}.`),
+  maxTurnsPerSession: z.number().int().min(1).max(20)
+    .optional()
+    .describe(`Max turns per session (hard cap: 20). Default: ${CONFIG_DEFAULTS.mcp.maxTurnsPerSession}.`),
+  maxCharsPerField: z.number().int().min(1).max(2000)
+    .optional()
+    .describe(`Max characters per text field (hard cap: 2000). Default: ${CONFIG_DEFAULTS.mcp.maxCharsPerField}.`),
+  includeToolCalls: z.boolean()
+    .optional()
+    .describe('List tool call names used in each turn. Default: true.'),
+  includeToolOutputs: z.boolean()
+    .optional()
+    .describe('Include tool result output wrapped in code fences. Off by default; enabling increases payload size significantly.'),
+  response_format: z.enum(['markdown', 'json'])
+    .optional()
+    .describe('Output format. "markdown" (default): human-readable with code blocks preserved. "json": structured data for programmatic processing.'),
+});
+
+type GetAgentHistoryInput = z.infer<typeof GetAgentHistorySchema>;
+
 export async function startMcpServer(): Promise<void> {
-  const server = new Server(
+  const server = new McpServer(
     { name: 'agent-history', version: '0.1.0' },
-    { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      {
-        name: 'get_agent_history',
-        description:
-          'Get coding agent conversation history from Claude Code, Cursor, and OpenClaw. ' +
-          'Returns sessions with user messages and assistant summaries. ' +
-          `Defaults: maxSessions=${CONFIG_DEFAULTS.mcp.maxSessions}, ` +
-          `maxTurnsPerSession=${CONFIG_DEFAULTS.mcp.maxTurnsPerSession}, ` +
-          `maxCharsPerField=${CONFIG_DEFAULTS.mcp.maxCharsPerField}.`,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            source: {
-              type: 'string',
-              enum: ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes', 'copilot'],
-              description: 'Filter by tool. Omit to get all sources.',
-            },
-            date: {
-              type: 'string',
-              description: 'ISO date string (e.g. "2026-05-06"). Omit for all history.',
-            },
-            maxSessions: {
-              type: 'number',
-              description: 'Max sessions to return. Overrides user default.',
-            },
-            maxTurnsPerSession: {
-              type: 'number',
-              description: 'Max turns per session. Overrides user default.',
-            },
-            maxCharsPerField: {
-              type: 'number',
-              description: 'Max characters per text field. Overrides user default.',
-            },
-            includeToolCalls: {
-              type: 'boolean',
-              description: 'Include tool call names in assistant summaries. Overrides user default.',
-            },
-            includeToolOutputs: {
-              type: 'boolean',
-              description: 'Include tool result outputs (truncated). Off by default to keep payloads small.',
-            },
-          },
-        },
+  server.registerTool(
+    'get_agent_history',
+    {
+      title: 'Get Agent History',
+      description:
+        'Retrieve prior coding-agent session history to continue work or hand off context to another agent or application. ' +
+        'Returns full conversation turns — user requests, assistant replies with code blocks preserved, ' +
+        'and optional tool-call traces — from Claude Code, Cursor, Codex, and other local sources. ' +
+        'Use this to resume an interrupted task, understand what was already built, ' +
+        "or load a previous session's context into a new agent so work can continue seamlessly. " +
+        `Defaults: maxSessions=${CONFIG_DEFAULTS.mcp.maxSessions}, ` +
+        `maxTurnsPerSession=${CONFIG_DEFAULTS.mcp.maxTurnsPerSession}, ` +
+        `maxCharsPerField=${CONFIG_DEFAULTS.mcp.maxCharsPerField}.`,
+      inputSchema: GetAgentHistorySchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
       },
-    ],
-  }));
+    },
+    async (params: GetAgentHistoryInput) => {
+      const config = await loadConfig();
+      const d = config.mcp;
 
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    if (req.params.name !== 'get_agent_history') {
-      return { content: [{ type: 'text', text: 'Unknown tool' }], isError: true };
-    }
+      const maxSessions = Math.min(params.maxSessions ?? d.maxSessions, 50);
+      const maxTurnsPerSession = Math.min(params.maxTurnsPerSession ?? d.maxTurnsPerSession, 20);
+      const maxCharsPerField = Math.min(params.maxCharsPerField ?? d.maxCharsPerField, 2000);
+      const includeToolCalls = params.includeToolCalls ?? d.includeToolCalls;
+      const includeToolOutputs = params.includeToolOutputs ?? d.includeToolOutputs;
+      const responseFormat = params.response_format ?? 'markdown';
 
-    const input = (req.params.arguments ?? {}) as Record<string, unknown>;
+      try {
+        const source = params.source as AgentSource | undefined;
+        const options = {
+          ...(params.date ? { date: new Date(params.date) } : {}),
+          maxSessions,
+          maxTurnsPerSession,
+          maxCharsPerField,
+        };
 
-    // Load user defaults from ~/.agent-history/config.json, then apply argument overrides.
-    const config = await loadConfig();
-    const d = config.mcp;
+        const sessions = source
+          ? await service.getSessionsBySource(source, options)
+          : await service.getSessions(options);
 
-    const maxSessions = Math.min(Number(input['maxSessions'] ?? d.maxSessions), 50);
-    const maxTurnsPerSession = Math.min(Number(input['maxTurnsPerSession'] ?? d.maxTurnsPerSession), 20);
-    const maxCharsPerField = Math.min(Number(input['maxCharsPerField'] ?? d.maxCharsPerField), 2000);
-    const includeToolCalls = (input['includeToolCalls'] as boolean | undefined) ?? d.includeToolCalls;
-    const includeToolOutputs = (input['includeToolOutputs'] as boolean | undefined) ?? d.includeToolOutputs;
+        if (sessions.length === 0) {
+          const hint = params.date
+            ? 'Try omitting the date filter or using a different date.'
+            : 'Check that the agent tool has been used and its history directory exists (e.g. ~/.claude/projects for claude-code).';
+          return { content: [{ type: 'text', text: `No agent history found. ${hint}` }] };
+        }
 
-    try {
-      const source = input['source'] as AgentSource | undefined;
-      const options = {
-        ...(input['date'] ? { date: new Date(input['date'] as string) } : {}),
-        maxSessions,
-        maxTurnsPerSession,
-        maxCharsPerField,
-      };
+        if (responseFormat === 'json') {
+          const data = sessions.map((session) => ({
+            source: session.source,
+            project: session.project,
+            startedAt: session.startedAt.toISOString(),
+            ...(session.endedAt ? { endedAt: session.endedAt.toISOString() } : {}),
+            ...(session.cwd ? { cwd: session.cwd } : {}),
+            ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+            turns: session.turns.map((turn) => {
+              const assistantText = (turn.items ?? [])
+                .filter((i): i is { kind: 'text'; text: string } => i.kind === 'text')
+                .map((i) => i.text)
+                .join('\n\n') || turn.assistantSummary;
+              const tools = includeToolCalls
+                ? (turn.items ?? [])
+                    .filter((i) => i.kind === 'tool')
+                    .map((i) => {
+                      if (i.kind !== 'tool') return null;
+                      return {
+                        name: i.tool.name,
+                        ...(includeToolOutputs && i.tool.output
+                          ? { output: i.tool.output.slice(0, maxCharsPerField) }
+                          : {}),
+                      };
+                    })
+                    .filter(Boolean)
+                : undefined;
+              return {
+                userMessage: turn.userMessage,
+                assistantText: assistantText.slice(0, maxCharsPerField),
+                ...(tools && tools.length > 0 ? { tools } : {}),
+              };
+            }),
+          }));
+          const text = JSON.stringify(data, null, 2);
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { sessions: data },
+          };
+        }
 
-      const sessions = source
-        ? await service.getSessionsBySource(source, options)
-        : await service.getSessions(options);
+        const lines: string[] = [];
+        for (const session of sessions) {
+          const headerParts = [`[${session.source}]`, session.project, session.startedAt.toISOString()];
+          if (session.cwd) headerParts.push(`cwd:${session.cwd}`);
+          if (session.gitBranch) headerParts.push(`branch:${session.gitBranch}`);
+          lines.push(`### ${headerParts.join(' | ')}`);
+          lines.push('');
 
-      if (sessions.length === 0) {
-        return { content: [{ type: 'text', text: 'No agent history found.' }] };
-      }
+          for (const [idx, turn] of session.turns.entries()) {
+            lines.push(`**[Turn ${idx + 1}] User:**`);
+            lines.push('');
+            lines.push(turn.userMessage);
+            lines.push('');
 
-      const lines: string[] = [];
-      for (const session of sessions) {
-        lines.push(`### [${session.source}] ${session.project} — ${session.startedAt.toISOString()}`);
-        for (const turn of session.turns) {
-          lines.push(`Q: ${turn.userMessage}`);
+            const textContent = (turn.items ?? [])
+              .filter((i): i is { kind: 'text'; text: string } => i.kind === 'text')
+              .map((i) => i.text)
+              .join('\n\n');
 
-          // Build assistant summary: text only, or with tool names appended.
-          const textItems = (turn.items ?? [])
-            .filter((i): i is { kind: 'text'; text: string } => i.kind === 'text')
-            .map((i) => i.text)
-            .join(' ');
+            const body = textContent || turn.assistantSummary;
+            if (body) {
+              lines.push('**Assistant:**');
+              lines.push('');
+              lines.push(body.slice(0, maxCharsPerField));
+              lines.push('');
+            }
 
-          if (textItems) {
-            const toolSuffix = includeToolCalls && turn.assistantSummary.includes('[')
-              ? ' ' + turn.assistantSummary.match(/\[[^\]]+\]$/)?.[0]
-              : '';
-            lines.push(`A: ${textItems.slice(0, maxCharsPerField)}${toolSuffix ?? ''}`);
-          } else if (turn.assistantSummary) {
-            lines.push(`A: ${turn.assistantSummary}`);
-          }
+            if (includeToolCalls) {
+              const toolItems = (turn.items ?? []).filter((i) => i.kind === 'tool');
+              if (toolItems.length > 0) {
+                const names = toolItems.map((i) => i.kind === 'tool' ? `\`${i.tool.name}\`` : '').filter(Boolean);
+                lines.push(`*Tools used: ${names.join(', ')}*`);
+                lines.push('');
+              }
+            }
 
-          if (includeToolOutputs) {
-            for (const item of turn.items ?? []) {
-              if (item.kind !== 'tool' || !item.tool.output) continue;
-              const out = item.tool.output.slice(0, maxCharsPerField);
-              lines.push(`  → ${item.tool.name}: ${out}`);
+            if (includeToolOutputs) {
+              for (const item of turn.items ?? []) {
+                if (item.kind !== 'tool' || !item.tool.output) continue;
+                lines.push(`**\`${item.tool.name}\` output:**`);
+                lines.push('```');
+                lines.push(item.tool.output.slice(0, maxCharsPerField));
+                lines.push('```');
+                lines.push('');
+              }
             }
           }
+          lines.push('---');
+          lines.push('');
         }
-        lines.push('');
-      }
 
-      return { content: [{ type: 'text', text: lines.join('\n') }] };
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${String(err)}` }],
-        isError: true,
-      };
-    }
-  });
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Error reading agent history: ${String(err)}. Try reducing maxSessions or maxTurnsPerSession, or check that the history directory is readable.` }],
+        };
+      }
+    },
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  console.error('agent-history MCP server running via stdio');
 }

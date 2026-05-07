@@ -1,11 +1,21 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions, ToolCall } from './types.js';
 import { truncate, extractProjectName, isWithinDate, selectTurns } from './utils.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
+
+interface ParsedSession {
+  session: AgentSession;
+  /** All uuids appearing in this JSONL — used to resolve `resumedFrom`. */
+  allUuids: string[];
+  /** parentUuid of the very first `user` text message, if any. */
+  firstParentUuid: string | null;
+}
+
+interface TerminalInfo { pid: number; kind?: string }
+interface IdeInfo { name: string; workspaceFolders: string[] }
 
 export class ClaudeCodeReader implements IReader {
   readonly source = 'claude-code' as const;
@@ -22,7 +32,7 @@ export class ClaudeCodeReader implements IReader {
     const claudeDir = path.join(os.homedir(), '.claude', 'projects');
     if (!await exists(claudeDir)) return [];
 
-    const sessions: AgentSession[] = [];
+    const parsed: ParsedSession[] = [];
 
     try {
       const projectDirs = await fs.readdir(claudeDir);
@@ -54,15 +64,41 @@ export class ClaudeCodeReader implements IReader {
           .slice(0, maxSessions);
 
         for (const { fp } of filtered) {
-          const session = await parseSession(fp, projectName, options.date, maxTurns, maxChars);
-          if (session) sessions.push(session);
-          if (sessions.length >= maxSessions) break;
+          const result = await parseSession(fp, projectName, options.date, maxTurns, maxChars);
+          if (result) parsed.push(result);
+          if (parsed.length >= maxSessions) break;
         }
 
-        if (sessions.length >= maxSessions) break;
+        if (parsed.length >= maxSessions) break;
       }
     } catch {
       // ディレクトリが読めない環境では空を返す
+    }
+
+    // Side-channel metadata: PID registry + IDE bridge locks. Both are runtime
+    // state that only exists while a terminal/IDE is connected, so we attach
+    // when present and silently skip otherwise.
+    const [pidMap, ideMap] = await Promise.all([loadPidRegistry(), loadIdeLocks()]);
+
+    // Resume resolution: build uuid → sessionId across everything we parsed,
+    // then look up each session's first parentUuid.
+    const uuidIndex = new Map<string, string>();
+    for (const p of parsed) for (const u of p.allUuids) uuidIndex.set(u, p.session.id);
+
+    const sessions: AgentSession[] = [];
+    for (const p of parsed) {
+      const s = p.session;
+      const term = pidMap.get(s.id);
+      if (term) s.terminal = term;
+      if (s.cwd) {
+        const ide = ideMap.get(normalizePath(s.cwd));
+        if (ide) s.ide = ide;
+      }
+      if (p.firstParentUuid) {
+        const parent = uuidIndex.get(p.firstParentUuid);
+        if (parent && parent !== s.id) s.resumedFrom = parent;
+      }
+      sessions.push(s);
     }
 
     return sessions
@@ -71,18 +107,76 @@ export class ClaudeCodeReader implements IReader {
   }
 }
 
+/**
+ * Load Claude Code's PID registry at ~/.claude/sessions/<pid>.json. Each file
+ * holds the *current* sessionId for that terminal process, so old sessions
+ * won't have a terminal entry — that's fine, attach when present.
+ */
+async function loadPidRegistry(): Promise<Map<string, TerminalInfo>> {
+  const dir = path.join(os.homedir(), '.claude', 'sessions');
+  if (!await exists(dir)) return new Map();
+  const files = await fs.readdir(dir).catch(() => []);
+  const out = new Map<string, TerminalInfo>();
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const raw = await fs.readFile(path.join(dir, f), 'utf-8');
+      const j = JSON.parse(raw) as { pid?: number; sessionId?: string; kind?: string };
+      if (typeof j.sessionId !== 'string' || typeof j.pid !== 'number') continue;
+      const entry: TerminalInfo = { pid: j.pid };
+      if (typeof j.kind === 'string') entry.kind = j.kind;
+      out.set(j.sessionId, entry);
+    } catch { /* skip */ }
+  }
+  return out;
+}
+
+/**
+ * Load IDE bridge lock files at ~/.claude/ide/<port>.lock. These are written
+ * while a Claude Code instance is connected to a VSCode/Cursor IDE; we key the
+ * map by normalized workspace folder so a session's cwd can find its IDE.
+ */
+async function loadIdeLocks(): Promise<Map<string, IdeInfo>> {
+  const dir = path.join(os.homedir(), '.claude', 'ide');
+  if (!await exists(dir)) return new Map();
+  const files = await fs.readdir(dir).catch(() => []);
+  const out = new Map<string, IdeInfo>();
+  for (const f of files) {
+    if (!f.endsWith('.lock')) continue;
+    try {
+      const raw = await fs.readFile(path.join(dir, f), 'utf-8');
+      const j = JSON.parse(raw) as { ideName?: string; workspaceFolders?: unknown };
+      const folders = Array.isArray(j.workspaceFolders)
+        ? j.workspaceFolders.filter((x): x is string => typeof x === 'string')
+        : [];
+      if (typeof j.ideName !== 'string' || folders.length === 0) continue;
+      const info: IdeInfo = { name: j.ideName, workspaceFolders: folders };
+      for (const folder of folders) out.set(normalizePath(folder), info);
+    } catch { /* skip */ }
+  }
+  return out;
+}
+
+function normalizePath(p: string): string {
+  return path.resolve(p).replace(/\\/g, '/').toLowerCase();
+}
+
 async function parseSession(
   filePath: string,
   projectName: string,
   targetDate: Date | undefined,
   maxTurns: number,
   maxChars: number,
-): Promise<AgentSession | null> {
+): Promise<ParsedSession | null> {
   const turns: AgentTurn[] = [];
   let startedAt: Date | null = null;
   let endedAt: Date | null = null;
   let cwd: string | undefined;
   let gitBranch: string | undefined;
+  let entrypoint: string | undefined;
+  let firstParentUuid: string | null = null;
+  let sawFirstUser = false;
+  const allUuids: string[] = [];
   let pendingUserMessage: string | null = null;
   let pendingTurnStart: Date | null = null;
   let pendingTurnEnd: Date | null = null;
@@ -91,6 +185,10 @@ async function parseSession(
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
   const pendingUseIndex = new Map<string, number>(); // tool_use_id -> pendingItems index
+
+  // The JSONL filename is the canonical sessionId Claude Code itself uses;
+  // we adopt it as the session id so resume references resolve cleanly.
+  const sessionId = path.basename(filePath, '.jsonl');
 
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -113,6 +211,8 @@ async function parseSession(
 
       if (!cwd && typeof root['cwd'] === 'string') cwd = root['cwd'] as string;
       if (!gitBranch && typeof root['gitBranch'] === 'string') gitBranch = root['gitBranch'] as string;
+      if (!entrypoint && typeof root['entrypoint'] === 'string') entrypoint = root['entrypoint'] as string;
+      if (typeof root['uuid'] === 'string') allUuids.push(root['uuid'] as string);
       if (timestamp) endedAt = endedAt && endedAt.getTime() > timestamp.getTime() ? endedAt : timestamp;
 
       if (type === 'user') {
@@ -129,6 +229,12 @@ async function parseSession(
           continue;
         }
         if (typeof contentVal !== 'string') continue;
+
+        if (!sawFirstUser) {
+          sawFirstUser = true;
+          const pu = root['parentUuid'];
+          if (typeof pu === 'string') firstParentUuid = pu;
+        }
 
         flushTurn(turns, pendingUserMessage, pendingItems, pendingTools, maxChars, pendingTurnStart, pendingTurnEnd, pendingTouchedFiles);
         pendingUserMessage = truncate(contentVal, maxChars);
@@ -162,7 +268,7 @@ async function parseSession(
   if (turns.length === 0) return null;
 
   const session: AgentSession = {
-    id: randomUUID(),
+    id: sessionId,
     source: 'claude-code',
     project: projectName,
     startedAt: startedAt ?? new Date(),
@@ -171,7 +277,8 @@ async function parseSession(
   if (cwd) session.cwd = cwd;
   if (gitBranch) session.gitBranch = gitBranch;
   if (endedAt) session.endedAt = endedAt;
-  return session;
+  if (entrypoint) session.entrypoint = entrypoint;
+  return { session, allUuids, firstParentUuid };
 }
 
 function flushTurn(
@@ -188,7 +295,7 @@ function flushTurn(
 
   // Build plain-text summary for MCP/copy output.
   const textParts = items.filter((i): i is { kind: 'text'; text: string } => i.kind === 'text');
-  const combinedText = textParts.map((i) => i.text).join(' ');
+  const combinedText = textParts.map((i) => i.text).join('\n\n');
   let summary = '';
   if (combinedText) {
     if (toolUses.size > 0) {

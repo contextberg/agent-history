@@ -8,15 +8,21 @@ import { AgentHistoryService } from '../readers/index.js';
 import type { AgentSource, ReaderOptions } from '../readers/index.js';
 import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
+import { aggregateCommits } from './commits.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.join(__dirname, 'web');
 
 const service = new AgentHistoryService();
 
-export async function startWebServer(port = 3847): Promise<void> {
-  if (!fs.existsSync(WEB_DIST)) {
-    throw new Error(`Web UI not found at ${WEB_DIST}. The package may be corrupted — try clearing the npx cache: npx clear-npx-cache`);
+interface WebServerOptions {
+  port?: number;
+  isDev?: boolean;
+}
+
+export async function startWebServer({ port = 3847, isDev = false }: WebServerOptions = {}): Promise<void> {
+  if (!isDev && !fs.existsSync(WEB_DIST)) {
+    throw new Error(`Web UI not found at ${WEB_DIST}. Run "npm run build" first, or use "npm run dev" for development.`);
   }
 
   const app = Fastify({ logger: false });
@@ -46,6 +52,11 @@ export async function startWebServer(port = 3847): Promise<void> {
     return service.getStatus();
   });
 
+  app.get('/api/commits', async () => {
+    const sessions = await service.getSessions({ maxSessions: 200 });
+    return { commits: await aggregateCommits(sessions) };
+  });
+
   app.get('/api/settings', async () => {
     return loadConfig();
   });
@@ -61,16 +72,28 @@ export async function startWebServer(port = 3847): Promise<void> {
     return updated;
   });
 
-  await app.register(staticPlugin, { root: WEB_DIST, prefix: '/' });
-
-  app.setNotFoundHandler((_req, reply) => {
-    reply.sendFile('index.html');
-  });
+  if (!isDev) {
+    await app.register(staticPlugin, { root: WEB_DIST, prefix: '/' });
+    app.setNotFoundHandler((_req, reply) => {
+      reply.sendFile('index.html');
+    });
+  }
 
   const actualPort = await listenWithFallback(app, port);
-  const url = `http://localhost:${actualPort}`;
-  console.log(`agent-history running at ${url}`);
-  await open(url);
+  if (isDev) {
+    // Publish the resolved port so vite.config.ts can proxy correctly even
+    // when the default 3847 is taken and we fall back to 3848/3849/...
+    try {
+      const portFile = path.join(__dirname, '..', '..', 'node_modules', '.cache', 'agent-history-port');
+      await fs.promises.mkdir(path.dirname(portFile), { recursive: true });
+      await fs.promises.writeFile(portFile, String(actualPort), 'utf-8');
+    } catch { /* non-fatal */ }
+    console.log(`[api] http://localhost:${actualPort} (proxied via Vite → http://localhost:5173)`);
+  } else {
+    const url = `http://localhost:${actualPort}`;
+    console.log(`agent-history running at ${url}`);
+    await open(url);
+  }
 }
 
 async function listenWithFallback(

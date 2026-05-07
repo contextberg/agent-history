@@ -40,6 +40,42 @@ export interface AgentSession {
   endedAt?: Date;
   /** Git branch active during the session, when the source records it. */
   gitBranch?: string;
+  /** OS-level identity of the agent process that ran the session. */
+  terminal?: {
+    pid: number;
+    /** "interactive" for the usual TUI; differs for one-shot/print/sdk runs. */
+    kind?: string;
+  };
+  /** When the session ran via an IDE bridge (Claude Code → VSCode/Cursor). */
+  ide?: {
+    name: string;
+    workspaceFolders: string[];
+  };
+  /**
+   * Source-specific entrypoint hint: e.g. "cli", "sdk", "ide" for claude-code,
+   * "codex-tui" for codex. Use to filter out non-interactive automation runs.
+   */
+  entrypoint?: string;
+  /**
+   * Session ID that this session was resumed from. Sessions chained via
+   * `--resume` form a logical-task lineage; the linkage layer treats them as
+   * one unit when grouping under a commit.
+   */
+  resumedFrom?: string;
+  /**
+   * Commit SHAs the session explicitly referenced (e.g. via `git log`/`git diff`
+   * output captured in tool results). Lets us link sessions whose source
+   * doesn't record cwd — hermes especially — to the repo whose history they
+   * touched.
+   */
+  referencedCommits?: string[];
+  /**
+   * Additional cwds observed during the session beyond the primary `cwd` —
+   * notably from openclaw exec `details.cwd` when the agent shelled into a
+   * different repo. The aggregator walks these the same way as `cwd` for repo
+   * discovery; never includes the primary cwd itself.
+   */
+  additionalCwds?: string[];
 }
 
 export interface ReaderOptions {

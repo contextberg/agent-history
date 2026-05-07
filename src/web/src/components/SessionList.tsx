@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { AgentSession, AgentSource } from '../types';
 import { sourceLabel, sourceHex } from '../utils/source';
 import { SourceIcon } from './SourceIcon';
+import { buildLineages, type Lineage } from '../utils/lineage';
 
 interface Props {
   sessions: AgentSession[];
@@ -35,8 +36,8 @@ function relTime(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function groupByDate(sessions: AgentSession[]): [string, AgentSession[]][] {
-  const result: Record<string, AgentSession[]> = {
+function groupLineagesByDate(lineages: Lineage[]): [string, Lineage[]][] {
+  const result: Record<string, Lineage[]> = {
     Today: [],
     Yesterday: [],
     'Earlier this week': [],
@@ -46,12 +47,12 @@ function groupByDate(sessions: AgentSession[]): [string, AgentSession[]][] {
   const today = new Date(now.toDateString()).getTime();
   const yesterday = today - 86400000;
   const weekAgo = today - 7 * 86400000;
-  for (const s of sessions) {
-    const t = new Date(s.startedAt).getTime();
-    if (t >= today) result.Today.push(s);
-    else if (t >= yesterday) result.Yesterday.push(s);
-    else if (t >= weekAgo) result['Earlier this week'].push(s);
-    else result.Older.push(s);
+  for (const l of lineages) {
+    const t = Date.parse(l.endedAt);
+    if (t >= today) result.Today.push(l);
+    else if (t >= yesterday) result.Yesterday.push(l);
+    else if (t >= weekAgo) result['Earlier this week'].push(l);
+    else result.Older.push(l);
   }
   return Object.entries(result).filter(([, list]) => list.length > 0);
 }
@@ -71,7 +72,7 @@ function highlight(text: string, q: string): React.ReactNode {
   );
 }
 
-function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: boolean; onSelect: () => void; query: string }) {
+function SessionRow({ s, active, onSelect, query, indent }: { s: AgentSession; active: boolean; onSelect: () => void; query: string; indent?: boolean }) {
   const [hover, setHover] = useState(false);
   const color = sourceHex(s.source);
   const preview = s.turns[0]?.userMessage || '';
@@ -90,7 +91,7 @@ function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: b
           display: 'flex',
           gap: 10,
           alignItems: 'flex-start',
-          padding: '10px 10px',
+          padding: indent ? '8px 10px 8px 22px' : '10px 10px',
           borderRadius: 8,
           backgroundColor: active
             ? 'var(--bg-card-selected)'
@@ -104,6 +105,19 @@ function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: b
           transition: 'background 90ms',
         }}
       >
+        {indent && (
+          <span
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: 11,
+              top: 0,
+              bottom: 0,
+              width: 1,
+              backgroundColor: 'var(--border-main)',
+            }}
+          />
+        )}
         {/* Left rail */}
         <span
           style={{
@@ -170,6 +184,172 @@ function SessionRow({ s, active, onSelect, query }: { s: AgentSession; active: b
   );
 }
 
+function LineageRow({
+  lineage,
+  selectedId,
+  onSelect,
+  query,
+}: {
+  lineage: Lineage;
+  selectedId: string | undefined;
+  onSelect: (s: AgentSession) => void;
+  query: string;
+}) {
+  const isMulti = lineage.members.length > 1;
+  const containsSelected = lineage.members.some((m) => m.id === selectedId);
+  // Auto-expand if selection is inside this chain so the user keeps context.
+  const [expanded, setExpanded] = useState(false);
+  const open = expanded || containsSelected;
+
+  if (!isMulti) {
+    const s = lineage.members[0]!;
+    return (
+      <SessionRow
+        s={s}
+        active={selectedId === s.id}
+        onSelect={() => onSelect(s)}
+        query={query}
+      />
+    );
+  }
+
+  // Multi-member: header card + (collapsed by default) member list. Clicking
+  // the header opens the latest member; the chevron toggles the list.
+  const latest = lineage.members[lineage.members.length - 1]!;
+  return (
+    <li>
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => onSelect(latest)}
+          className="focus-ring"
+          style={{
+            width: '100%',
+            textAlign: 'left',
+            display: 'flex',
+            gap: 10,
+            alignItems: 'flex-start',
+            padding: '10px 36px 10px 10px',
+            borderRadius: 8,
+            backgroundColor: containsSelected
+              ? 'var(--bg-card-selected)'
+              : 'transparent',
+            border: `1px solid ${containsSelected ? 'var(--border-card-selected)' : 'transparent'}`,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            color: 'inherit',
+          }}
+        >
+          <span style={{ marginTop: 4, flexShrink: 0 }}>
+            <SourceIcon source={lineage.source} size={16} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  letterSpacing: '-0.005em',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {latest.project}
+              </span>
+              <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                {relTime(lineage.endedAt)}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3 }}>
+              <span
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  letterSpacing: '0.07em',
+                  textTransform: 'uppercase',
+                  color: sourceHex(lineage.source),
+                }}
+              >
+                {sourceLabel(lineage.source)}
+              </span>
+              <span style={{ width: 2, height: 2, borderRadius: 999, backgroundColor: 'var(--text-quaternary)' }} />
+              <span
+                style={{
+                  fontSize: 10.5,
+                  color: 'var(--accent)',
+                  fontWeight: 600,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                ↳ {lineage.members.length} sessions
+              </span>
+            </div>
+            {latest.turns[0]?.userMessage && (
+              <p
+                className="clamp-2"
+                style={{ margin: '5px 0 0', fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}
+              >
+                {latest.turns[0].userMessage}
+              </p>
+            )}
+          </div>
+        </button>
+        {/* Chevron: toggle expansion independently of header click */}
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+          aria-label={open ? 'Collapse chain' : 'Expand chain'}
+          title={open ? 'Collapse chain' : 'Expand chain'}
+          style={{
+            position: 'absolute',
+            right: 8,
+            top: 8,
+            width: 22,
+            height: 22,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 6,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-tertiary)',
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}
+          >
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+        </button>
+      </div>
+      {open && (
+        <ul style={{ listStyle: 'none', padding: '2px 0 4px', margin: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {lineage.members.map((m) => (
+            <SessionRow
+              key={m.id}
+              s={m}
+              active={selectedId === m.id}
+              onSelect={() => onSelect(m)}
+              query={query}
+              indent
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 export function SessionList({ sessions, selectedId, onSelect, status, query = '' }: Props) {
   if (sessions.length === 0) {
     return (
@@ -219,7 +399,8 @@ export function SessionList({ sessions, selectedId, onSelect, status, query = ''
     );
   }
 
-  const groups = groupByDate(sessions);
+  const lineages = useMemo(() => buildLineages(sessions), [sessions]);
+  const groups = groupLineagesByDate(lineages);
 
   return (
     <div style={{ padding: '6px 0 8px' }}>
@@ -236,12 +417,12 @@ export function SessionList({ sessions, selectedId, onSelect, status, query = ''
             {label}
           </div>
           <ul style={{ listStyle: 'none', padding: '0 8px', margin: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {list.map((s) => (
-              <SessionRow
-                key={s.id}
-                s={s}
-                active={selectedId === s.id}
-                onSelect={() => onSelect(s)}
+            {list.map((l) => (
+              <LineageRow
+                key={l.id}
+                lineage={l}
+                selectedId={selectedId}
+                onSelect={onSelect}
                 query={query}
               />
             ))}

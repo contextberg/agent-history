@@ -33,7 +33,9 @@ export class OpenClawReader implements IReader {
 
         const files = await fs.readdir(sessionsDir);
         const jsonlFiles = files.filter(
-          (f) => f.endsWith('.jsonl') && !f.endsWith('.trajectory.jsonl'),
+          (f) =>
+            (f.endsWith('.jsonl') && !f.endsWith('.trajectory.jsonl')) ||
+            f.includes('.jsonl.reset.'),
         );
 
         const withMtime = await Promise.all(
@@ -79,11 +81,19 @@ async function parseSession(
 ): Promise<AgentSession | null> {
   const turns: AgentTurn[] = [];
   let startedAt: Date | null = null;
+  let endedAt: Date | null = null;
+  let cwd: string | undefined;
   let projectName = 'openclaw';
   let pendingUserMessage: string | null = null;
   const pendingItems: AssistantItem[] = [];
   const pendingTools = new Map<string, number>();
   const pendingCallIndex = new Map<string, number>(); // toolCall.id -> pendingItems index
+  let pendingTurnStart: Date | null = null;
+  let pendingTurnEnd: Date | null = null;
+  let pendingTouchedFiles: Set<string> = new Set();
+  // Distinct cwds observed in exec toolResult.details.cwd. When the agent
+  // shells into a repo different from the workspace, these expose it.
+  const observedExecCwds = new Set<string>();
 
   function flushTurn(): void {
     if (!pendingUserMessage || pendingItems.length === 0) return;
@@ -102,11 +112,18 @@ async function parseSession(
     } else if (pendingTools.size > 0) {
       summary = '→ ' + [...pendingTools.entries()].map(([k, v]) => `${k}×${v}`).join(', ');
     }
-    turns.push({ userMessage: pendingUserMessage, assistantSummary: summary, items: [...pendingItems] });
+    const turn: AgentTurn = { userMessage: pendingUserMessage, assistantSummary: summary, items: [...pendingItems] };
+    if (pendingTurnStart) turn.startedAt = pendingTurnStart;
+    if (pendingTurnEnd) turn.endedAt = pendingTurnEnd;
+    if (pendingTouchedFiles.size > 0) turn.touchedFiles = [...pendingTouchedFiles];
+    turns.push(turn);
     pendingUserMessage = null;
     pendingItems.length = 0;
     pendingTools.clear();
     pendingCallIndex.clear();
+    pendingTurnStart = null;
+    pendingTurnEnd = null;
+    pendingTouchedFiles = new Set();
   }
 
   try {
@@ -121,9 +138,10 @@ async function parseSession(
       const type = root['type'];
 
       if (type === 'session') {
-        const cwd = root['cwd'];
-        if (typeof cwd === 'string') {
-          projectName = path.basename(cwd.replace(/[/\\]+$/, '')) || projectName;
+        const sessCwd = root['cwd'];
+        if (typeof sessCwd === 'string') {
+          cwd = sessCwd;
+          projectName = path.basename(sessCwd.replace(/[/\\]+$/, '')) || projectName;
         }
         const ts = parseTimestamp(root['timestamp']);
         if (ts) startedAt = ts;
@@ -135,12 +153,20 @@ async function parseSession(
       const timestamp = parseTimestamp(root['timestamp']);
       if (!timestamp) continue;
       if (targetDate && !isWithinDate(timestamp, targetDate)) continue;
+      endedAt = endedAt && endedAt.getTime() > timestamp.getTime() ? endedAt : timestamp;
 
       const msg = root['message'] as Record<string, unknown> | undefined;
       const role = msg?.['role'];
 
       if (role === 'toolResult' && pendingUserMessage !== null) {
         const callId = msg?.['toolCallId'] as string | undefined;
+        // exec results carry `details.cwd` — the absolute working directory
+        // the command actually ran in. Captured even when we can't attach
+        // the result to a tool item (callId missing) so a `cd <repo> && git`
+        // sequence still surfaces the repo.
+        const details = msg?.['details'] as Record<string, unknown> | undefined;
+        const detailsCwd = details?.['cwd'];
+        if (typeof detailsCwd === 'string' && detailsCwd) observedExecCwds.add(detailsCwd);
         if (!callId) continue;
         const idx = pendingCallIndex.get(callId);
         if (idx === undefined) continue;
@@ -156,16 +182,20 @@ async function parseSession(
         const text = extractFirstText(contentVal);
         if (text.trim()) {
           pendingUserMessage = truncate(text, maxChars);
+          pendingTurnStart = timestamp;
+          pendingTurnEnd = timestamp;
           if (!startedAt) startedAt = timestamp;
         }
       } else if (role === 'assistant' && pendingUserMessage !== null) {
         const contentVal = msg?.['content'];
-        const { items, toolUses, idIndex } = extractAssistantParts(contentVal, pendingItems.length);
+        const { items, toolUses, idIndex, files } = extractAssistantParts(contentVal, pendingItems.length, cwd);
         pendingItems.push(...items);
         for (const [name, count] of toolUses) {
           pendingTools.set(name, (pendingTools.get(name) ?? 0) + count);
         }
         for (const [id, idx] of idIndex) pendingCallIndex.set(id, idx);
+        for (const f of files) pendingTouchedFiles.add(f);
+        pendingTurnEnd = timestamp;
       }
     }
 
@@ -176,16 +206,35 @@ async function parseSession(
 
   if (turns.length === 0) return null;
 
-  return {
+  const session: AgentSession = {
     id: randomUUID(),
     source: 'openclaw',
     project: projectName,
     startedAt: startedAt ?? new Date(),
     turns: selectTurns(turns, maxTurns),
   };
+  if (cwd) session.cwd = cwd;
+  if (endedAt) session.endedAt = endedAt;
+  // Surface only exec cwds that differ from the primary cwd — duplicates of
+  // the workspace dir provide no new repo-discovery signal.
+  const primary = cwd;
+  const extras = [...observedExecCwds].filter((c) => c !== primary);
+  if (extras.length > 0) session.additionalCwds = extras;
+  return session;
 }
 
+// OpenClaw injects system content before user messages. The actual user text
+// follows a "[DayAbbr YYYY-MM-DD HH:MM GMT±N]" timestamp at the end of the content.
+const OC_TIMESTAMP_RE = /\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[+\-][\d]+\]\s+([\s\S]+)$/;
+
 function extractFirstText(content: unknown): string {
+  const raw = rawText(content);
+  if (!raw) return '';
+  const m = raw.match(OC_TIMESTAMP_RE);
+  return m ? m[1]!.trim() : '';
+}
+
+function rawText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   for (const item of content) {
@@ -199,12 +248,14 @@ function extractFirstText(content: unknown): string {
 function extractAssistantParts(
   content: unknown,
   baseOffset: number,
-): { items: AssistantItem[]; toolUses: Map<string, number>; idIndex: Map<string, number> } {
+  cwd: string | undefined,
+): { items: AssistantItem[]; toolUses: Map<string, number>; idIndex: Map<string, number>; files: string[] } {
   const items: AssistantItem[] = [];
   const toolUses = new Map<string, number>();
   const idIndex = new Map<string, number>();
+  const files: string[] = [];
 
-  if (!Array.isArray(content)) return { items, toolUses, idIndex };
+  if (!Array.isArray(content)) return { items, toolUses, idIndex, files };
 
   for (const item of content) {
     if (!item || typeof item !== 'object') continue;
@@ -222,10 +273,18 @@ function extractAssistantParts(
       const idx = baseOffset + items.length;
       items.push({ kind: 'tool', tool: { name, input } });
       if (id) idIndex.set(id, idx);
+      // Edit-only file extraction. OpenClaw's write tool takes a `path`;
+      // read/exec/etc. are exploration noise that would muddy commit linkage.
+      if (name === 'write' || name === 'edit') {
+        const p = input['path'] ?? input['file_path'];
+        if (typeof p === 'string' && p) {
+          files.push(path.isAbsolute(p) ? p : (cwd ? path.resolve(cwd, p) : p));
+        }
+      }
     }
   }
 
-  return { items, toolUses, idIndex };
+  return { items, toolUses, idIndex, files };
 }
 
 function stringifyOpenClawResult(content: unknown): string {

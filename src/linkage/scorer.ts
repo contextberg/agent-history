@@ -25,27 +25,64 @@ const WEIGHTS = { repo: 0.25, time: 0.35, files: 0.35, branch: 0.05 };
 /** Default cutoff for "this session likely contributed to this commit". */
 export const DEFAULT_LINK_THRESHOLD = 0.45;
 
+export interface ScoreOptions {
+  /**
+   * Aggregator-level hint: this session is known to be related to the commit's
+   * repo (e.g. via referencedCommits → sha→repo mapping) even though its
+   * cwd/touchedFiles don't prove it. Without this, hermes-style sessions —
+   * which have no cwd and only relative write paths — get repo=0 and never
+   * link to *any* commit, even commits in repos they clearly worked in.
+   */
+  repoMatched?: boolean;
+}
+
 /**
  * Score a (session, commit) pair. The total is a weighted sum of sub-scores,
  * but if `repo` is 0 we short-circuit — a session that didn't run inside the
  * commit's repo cannot have contributed to it.
+ *
+ * Two adjustments handle SHA references:
+ *   - If the session referenced this commit's SHA AND the commit happened
+ *     after the session started, treat it as authoring evidence — floor to
+ *     0.85. (Most often: agent ran a `git log` that *included* the SHA it
+ *     just produced.)
+ *   - If the commit *predates* the session's start, the SHA reference is
+ *     just the agent reading prior history (e.g. `git log -n 5` for context).
+ *     We don't apply the 0.85 floor — the link should rise or fall on the
+ *     normal time/file dimensions, which will be weak for past commits.
  */
-export function scoreSessionCommit(session: AgentSession, commit: GitCommit): LinkageScore {
+export function scoreSessionCommit(
+  session: AgentSession,
+  commit: GitCommit,
+  opts?: ScoreOptions,
+): LinkageScore {
   const parts = {
-    repo: scoreRepo(session, commit),
+    repo: opts?.repoMatched ? 1 : scoreRepo(session, commit),
     time: scoreTime(session, commit),
     files: scoreFiles(session, commit),
     branch: scoreBranch(session, commit),
   };
 
-  const total = parts.repo === 0
+  const sha = commit.sha.toLowerCase();
+  const rawReferenced = (session.referencedCommits ?? []).some(
+    (r) => sha === r.toLowerCase() || sha.startsWith(r.toLowerCase()),
+  );
+  const commitPredatesSession = commit.time.getTime() < session.startedAt.getTime();
+  const authoringReference = rawReferenced && !commitPredatesSession;
+
+  let total = parts.repo === 0
     ? 0
     : parts.repo * WEIGHTS.repo
       + parts.time * WEIGHTS.time
       + parts.files * WEIGHTS.files
       + parts.branch * WEIGHTS.branch;
 
-  return { total, parts, reason: buildReason(parts) };
+  if (authoringReference) {
+    total = Math.max(total, 0.85);
+    parts.repo = 1;
+  }
+
+  return { total, parts, reason: buildReason(parts, authoringReference) };
 }
 
 /**
@@ -69,36 +106,87 @@ export function linkSessionsToCommits(
   return links;
 }
 
+/**
+ * The session is "in" the commit's repo if either:
+ *   (a) its cwd is inside the repo (most common — claude-code, cursor), OR
+ *   (b) any *absolute* file it touched lives inside the repo (catches
+ *       openclaw-style agents that run from a workspace dir but write to
+ *       absolute paths in other repos).
+ *
+ * Relative touchedFiles are deliberately ignored — `path.resolve` would
+ * silently resolve them against the agent-history *process* cwd, which is
+ * unrelated to where the agent itself was running and produces phantom
+ * matches (notably for hermes, which records relative `write_file` paths).
+ */
 function scoreRepo(session: AgentSession, commit: GitCommit): number {
-  if (!session.cwd) return 0;
-  const cwd = path.resolve(session.cwd);
   const repo = path.resolve(commit.repo);
-  return isInside(cwd, repo) ? 1 : 0;
+  if (session.cwd && isInside(path.resolve(session.cwd), repo)) return 1;
+  for (const c of session.additionalCwds ?? []) {
+    if (isInside(path.resolve(c), repo)) return 1;
+  }
+  for (const t of session.turns) {
+    for (const f of t.touchedFiles ?? []) {
+      if (!path.isAbsolute(f)) continue;
+      if (isInside(f, repo)) return 1;
+    }
+  }
+  return 0;
 }
 
 /**
  * Time score peaks when the commit happens during or shortly after the
- * session's active window (developers commit *after* the agent finishes).
- * Wider windows decay linearly to 0 over ~6 hours.
+ * session's *edit activity* window (developers commit after the agent
+ * finishes editing). When per-turn timestamps + touchedFiles are available,
+ * we narrow the window to the span covering edit-bearing turns — a 10-hour
+ * session with a 5-minute editing burst should only score commits near
+ * those 5 minutes, not the entire 10 hours.
+ *
+ * Falls back to the full session window when:
+ *   - no turn has touchedFiles, or
+ *   - the source doesn't record per-turn timestamps (hermes, partly cursor).
+ *
+ * Decay is asymmetric: post-window over 6h (developer commits after work),
+ * pre-window over 1h with heavy damping (commits before edits can't have been
+ * caused by them).
  */
 function scoreTime(session: AgentSession, commit: GitCommit): number {
-  const sessionStart = session.startedAt.getTime();
-  const sessionEnd = (session.endedAt ?? session.startedAt).getTime();
+  const { start: windowStart, end: windowEnd } = activeWindow(session);
   const commitT = commit.time.getTime();
 
-  // Inside the session window — strongest signal.
-  if (commitT >= sessionStart && commitT <= sessionEnd) return 1;
+  if (commitT >= windowStart && commitT <= windowEnd) return 1;
 
-  // After the session ends, decaying over 6h. Pre-session decays much faster
-  // (1h) since commits before the session can't have been caused by it.
-  if (commitT > sessionEnd) {
-    const dt = commitT - sessionEnd;
+  if (commitT > windowEnd) {
+    const dt = commitT - windowEnd;
     const window = 6 * 60 * 60 * 1000;
     return Math.max(0, 1 - dt / window);
   }
-  const dt = sessionStart - commitT;
+  const dt = windowStart - commitT;
   const window = 60 * 60 * 1000;
-  return Math.max(0, 1 - dt / window) * 0.3; // dampened — pre-commits are weak signal
+  return Math.max(0, 1 - dt / window) * 0.3;
+}
+
+/**
+ * Returns the time range covering the session's edit-bearing turns. If no
+ * turn records both an edit and a timestamp, falls back to the full session
+ * window. The fallback isn't ideal but is the best we can do for sources
+ * that don't expose per-turn time (hermes top-level only, cursor user bubbles).
+ */
+function activeWindow(session: AgentSession): { start: number; end: number } {
+  const editTimes: number[] = [];
+  for (const t of session.turns) {
+    if (!t.touchedFiles || t.touchedFiles.length === 0) continue;
+    const start = t.startedAt?.getTime();
+    const end = (t.endedAt ?? t.startedAt)?.getTime();
+    if (start) editTimes.push(start);
+    if (end) editTimes.push(end);
+  }
+  if (editTimes.length > 0) {
+    return { start: Math.min(...editTimes), end: Math.max(...editTimes) };
+  }
+  return {
+    start: session.startedAt.getTime(),
+    end: (session.endedAt ?? session.startedAt).getTime(),
+  };
 }
 
 /**
@@ -134,9 +222,10 @@ function isInside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function buildReason(parts: LinkageScore['parts']): string {
+function buildReason(parts: LinkageScore['parts'], referenced = false): string {
   const bits: string[] = [];
-  if (parts.repo === 1) bits.push('repo match');
+  if (referenced) bits.push('referenced this commit');
+  if (parts.repo === 1 && !referenced) bits.push('repo match');
   if (parts.time === 1) bits.push('committed during session');
   else if (parts.time > 0.5) bits.push('committed shortly after session');
   if (parts.files > 0.5) bits.push(`${Math.round(parts.files * 100)}% file overlap`);

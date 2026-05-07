@@ -2,6 +2,7 @@ import { startMcpServer } from './mcp/server.js';
 import { startWebServer } from './server/index.js';
 
 const isMcp = process.argv.includes('--mcp');
+const isDev = process.argv.includes('--dev');
 
 if (isMcp) {
   startMcpServer().catch((err) => {
@@ -9,7 +10,7 @@ if (isMcp) {
     process.exit(1);
   });
 } else {
-  startWebServer().catch((err) => {
+  startWebServer({ isDev }).catch((err) => {
     console.error('[agent-history] Failed to start server:', err);
     process.exit(1);
   });

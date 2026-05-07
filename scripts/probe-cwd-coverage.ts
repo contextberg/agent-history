@@ -21,6 +21,10 @@ async function main(): Promise<void> {
     const withCwd = sessions.filter((s) => !!s.cwd).length;
     const withEnded = sessions.filter((s) => !!s.endedAt).length;
     const withBranch = sessions.filter((s) => !!s.gitBranch).length;
+    const withTerminal = sessions.filter((s) => !!s.terminal).length;
+    const withIde = sessions.filter((s) => !!s.ide).length;
+    const withResume = sessions.filter((s) => !!s.resumedFrom).length;
+    const withEntrypoint = sessions.filter((s) => !!s.entrypoint).length;
     const turnsTotal = sessions.reduce((n, s) => n + s.turns.length, 0);
     const turnsWithStart = sessions.reduce((n, s) => n + s.turns.filter((t) => !!t.startedAt).length, 0);
     const turnsWithFiles = sessions.reduce((n, s) => n + s.turns.filter((t) => (t.touchedFiles?.length ?? 0) > 0).length, 0);
@@ -30,8 +34,15 @@ async function main(): Promise<void> {
     );
     console.log(`[${name}] sessions=${total}  cwd=${withCwd}  endedAt=${withEnded}  gitBranch=${withBranch}`);
     console.log(`         turns=${turnsTotal}  turnsWithStart=${turnsWithStart}  turnsWithEdits=${turnsWithFiles}  totalEditPaths=${filesTotal}`);
+    console.log(`         terminal=${withTerminal}  ide=${withIde}  resumedFrom=${withResume}  entrypoint=${withEntrypoint}`);
     const sample = sessions.find((s) => s.cwd);
     if (sample) console.log(`         sample cwd: ${sample.cwd}`);
+    const termSample = sessions.find((s) => s.terminal);
+    if (termSample) console.log(`         sample terminal: pid=${termSample.terminal!.pid} kind=${termSample.terminal!.kind ?? '?'}`);
+    const ideSample = sessions.find((s) => s.ide);
+    if (ideSample) console.log(`         sample ide: ${ideSample.ide!.name} (${ideSample.ide!.workspaceFolders[0] ?? ''})`);
+    const resumeSample = sessions.find((s) => s.resumedFrom);
+    if (resumeSample) console.log(`         sample resume: ${resumeSample.id.slice(0,8)} ← ${resumeSample.resumedFrom?.slice(0,8)}`);
     const editSample = sessions.find((s) => s.turns.some((t) => (t.touchedFiles?.length ?? 0) > 0));
     if (editSample) {
       const t = editSample.turns.find((t) => (t.touchedFiles?.length ?? 0) > 0);
