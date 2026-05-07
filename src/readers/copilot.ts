@@ -180,6 +180,8 @@ async function loadJsonlSession(filePath: string): Promise<CopilotState | null> 
     try { evt = JSON.parse(line); } catch { continue; }
     if (evt.kind === 0 && evt.v && typeof evt.v === 'object') {
       state = evt.v as CopilotState;
+    } else if (evt.kind === 2 && Array.isArray(evt.k) && Array.isArray(evt.v)) {
+      appendAtPath(state as Record<string, unknown>, evt.k, evt.v);
     } else if (Array.isArray(evt.k)) {
       setAtPath(state as Record<string, unknown>, evt.k, evt.v);
     }
@@ -223,6 +225,35 @@ function setAtPath(root: Record<string, unknown>, keys: unknown[], value: unknow
   }
 }
 
+// kind:2 in the VS Code delta protocol means "append items to array at path".
+function appendAtPath(root: Record<string, unknown>, keys: unknown[], items: unknown[]): void {
+  if (keys.length === 0) return;
+  let cur: unknown = root;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k = keys[i];
+    const nextKey = keys[i + 1];
+    if (typeof k === 'string' && typeof cur === 'object' && cur !== null && !Array.isArray(cur)) {
+      const obj = cur as Record<string, unknown>;
+      if (obj[k] === undefined || obj[k] === null) obj[k] = typeof nextKey === 'number' ? [] : {};
+      cur = obj[k];
+    } else if (typeof k === 'number' && Array.isArray(cur)) {
+      if (cur[k] === undefined) cur[k] = typeof nextKey === 'number' ? [] : {};
+      cur = cur[k];
+    } else {
+      return;
+    }
+  }
+  const last = keys[keys.length - 1];
+  if (typeof last === 'string' && typeof cur === 'object' && cur !== null && !Array.isArray(cur)) {
+    const obj = cur as Record<string, unknown>;
+    if (!Array.isArray(obj[last])) obj[last] = [];
+    (obj[last] as unknown[]).push(...items);
+  } else if (typeof last === 'number' && Array.isArray(cur)) {
+    if (!Array.isArray(cur[last])) cur[last] = [];
+    (cur[last] as unknown[]).push(...items);
+  }
+}
+
 function buildSession(
   state: CopilotState,
   project: string,
@@ -234,6 +265,7 @@ function buildSession(
   const turns: AgentTurn[] = [];
 
   for (const req of requests) {
+    if (!req) continue;
     const userText = typeof req.message?.text === 'string' ? req.message.text.trim() : '';
     if (!userText) continue;
 

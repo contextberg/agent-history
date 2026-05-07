@@ -1,6 +1,6 @@
 {
   "name": "@contextberg/agent-history",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Browse and copy AI coding agent transcripts from Claude Code, Cursor, OpenClaw and more",
   "license": "MIT",
   "author": "Contextberg",
