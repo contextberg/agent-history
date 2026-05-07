@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions, ToolCall } from './types.js';
 import { truncate, extractProjectName, isWithinDate, selectTurns } from './utils.js';
+import { wslHomePaths } from './wsl.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 
@@ -21,7 +22,7 @@ export class ClaudeCodeReader implements IReader {
   readonly source = 'claude-code' as const;
 
   async isInstalled(): Promise<boolean> {
-    return exists(path.join(os.homedir(), '.claude', 'projects'));
+    return (await claudeSubdirs('projects')).length > 0;
   }
 
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
@@ -29,50 +30,54 @@ export class ClaudeCodeReader implements IReader {
     const maxTurns = options.maxTurnsPerSession ?? DEFAULTS.maxTurns;
     const maxChars = options.maxCharsPerField ?? DEFAULTS.maxChars;
 
-    const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-    if (!await exists(claudeDir)) return [];
+    const projectRoots = await claudeSubdirs('projects');
+    if (projectRoots.length === 0) return [];
 
     const parsed: ParsedSession[] = [];
 
-    try {
-      const projectDirs = await fs.readdir(claudeDir);
+    for (const claudeDir of projectRoots) {
+      try {
+        const projectDirs = await fs.readdir(claudeDir);
 
-      for (const dirName of projectDirs) {
-        const projectDir = path.join(claudeDir, dirName);
-        const stat = await fs.stat(projectDir).catch(() => null);
-        if (!stat?.isDirectory()) continue;
+        for (const dirName of projectDirs) {
+          const projectDir = path.join(claudeDir, dirName);
+          const stat = await fs.stat(projectDir).catch(() => null);
+          if (!stat?.isDirectory()) continue;
 
-        const projectName = extractProjectName(dirName);
-        const files = await fs.readdir(projectDir);
-        const jsonlFiles = files.filter((f) => f.endsWith('.jsonl'));
+          const projectName = extractProjectName(dirName);
+          const files = await fs.readdir(projectDir);
+          const jsonlFiles = files.filter((f) => f.endsWith('.jsonl'));
 
-        const withMtime = await Promise.all(
-          jsonlFiles.map(async (f) => {
-            const fp = path.join(projectDir, f);
-            const s = await fs.stat(fp).catch(() => null);
-            return s ? { fp, mtime: s.mtime } : null;
-          }),
-        );
+          const withMtime = await Promise.all(
+            jsonlFiles.map(async (f) => {
+              const fp = path.join(projectDir, f);
+              const s = await fs.stat(fp).catch(() => null);
+              return s ? { fp, mtime: s.mtime } : null;
+            }),
+          );
 
-        const filtered = withMtime
-          .filter((x): x is NonNullable<typeof x> => {
-            if (!x) return false;
-            if (options.date) return isWithinDate(x.mtime, options.date);
-            return true;
-          })
-          .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
-          .slice(0, maxSessions);
+          const filtered = withMtime
+            .filter((x): x is NonNullable<typeof x> => {
+              if (!x) return false;
+              if (options.date) return isWithinDate(x.mtime, options.date);
+              return true;
+            })
+            .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+            .slice(0, maxSessions);
 
-        for (const { fp } of filtered) {
-          const result = await parseSession(fp, projectName, options.date, maxTurns, maxChars);
-          if (result) parsed.push(result);
+          for (const { fp } of filtered) {
+            const result = await parseSession(fp, projectName, options.date, maxTurns, maxChars);
+            if (result) parsed.push(result);
+            if (parsed.length >= maxSessions) break;
+          }
+
           if (parsed.length >= maxSessions) break;
         }
-
-        if (parsed.length >= maxSessions) break;
+      } catch {
+        // ディレクトリが読めない環境ではスキップして次のルートへ
       }
-    } catch {
-      // ディレクトリが読めない環境では空を返す
+
+      if (parsed.length >= maxSessions) break;
     }
 
     // Side-channel metadata: PID registry + IDE bridge locks. Both are runtime
@@ -113,20 +118,20 @@ export class ClaudeCodeReader implements IReader {
  * won't have a terminal entry — that's fine, attach when present.
  */
 async function loadPidRegistry(): Promise<Map<string, TerminalInfo>> {
-  const dir = path.join(os.homedir(), '.claude', 'sessions');
-  if (!await exists(dir)) return new Map();
-  const files = await fs.readdir(dir).catch(() => []);
   const out = new Map<string, TerminalInfo>();
-  for (const f of files) {
-    if (!f.endsWith('.json')) continue;
-    try {
-      const raw = await fs.readFile(path.join(dir, f), 'utf-8');
-      const j = JSON.parse(raw) as { pid?: number; sessionId?: string; kind?: string };
-      if (typeof j.sessionId !== 'string' || typeof j.pid !== 'number') continue;
-      const entry: TerminalInfo = { pid: j.pid };
-      if (typeof j.kind === 'string') entry.kind = j.kind;
-      out.set(j.sessionId, entry);
-    } catch { /* skip */ }
+  for (const dir of await claudeSubdirs('sessions')) {
+    const files = await fs.readdir(dir).catch(() => []);
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(dir, f), 'utf-8');
+        const j = JSON.parse(raw) as { pid?: number; sessionId?: string; kind?: string };
+        if (typeof j.sessionId !== 'string' || typeof j.pid !== 'number') continue;
+        const entry: TerminalInfo = { pid: j.pid };
+        if (typeof j.kind === 'string') entry.kind = j.kind;
+        out.set(j.sessionId, entry);
+      } catch { /* skip */ }
+    }
   }
   return out;
 }
@@ -137,24 +142,37 @@ async function loadPidRegistry(): Promise<Map<string, TerminalInfo>> {
  * map by normalized workspace folder so a session's cwd can find its IDE.
  */
 async function loadIdeLocks(): Promise<Map<string, IdeInfo>> {
-  const dir = path.join(os.homedir(), '.claude', 'ide');
-  if (!await exists(dir)) return new Map();
-  const files = await fs.readdir(dir).catch(() => []);
   const out = new Map<string, IdeInfo>();
-  for (const f of files) {
-    if (!f.endsWith('.lock')) continue;
-    try {
-      const raw = await fs.readFile(path.join(dir, f), 'utf-8');
-      const j = JSON.parse(raw) as { ideName?: string; workspaceFolders?: unknown };
-      const folders = Array.isArray(j.workspaceFolders)
-        ? j.workspaceFolders.filter((x): x is string => typeof x === 'string')
-        : [];
-      if (typeof j.ideName !== 'string' || folders.length === 0) continue;
-      const info: IdeInfo = { name: j.ideName, workspaceFolders: folders };
-      for (const folder of folders) out.set(normalizePath(folder), info);
-    } catch { /* skip */ }
+  for (const dir of await claudeSubdirs('ide')) {
+    const files = await fs.readdir(dir).catch(() => []);
+    for (const f of files) {
+      if (!f.endsWith('.lock')) continue;
+      try {
+        const raw = await fs.readFile(path.join(dir, f), 'utf-8');
+        const j = JSON.parse(raw) as { ideName?: string; workspaceFolders?: unknown };
+        const folders = Array.isArray(j.workspaceFolders)
+          ? j.workspaceFolders.filter((x): x is string => typeof x === 'string')
+          : [];
+        if (typeof j.ideName !== 'string' || folders.length === 0) continue;
+        const info: IdeInfo = { name: j.ideName, workspaceFolders: folders };
+        for (const folder of folders) out.set(normalizePath(folder), info);
+      } catch { /* skip */ }
+    }
   }
   return out;
+}
+
+/**
+ * Resolve `~/.claude/<sub>` across native home and (on Windows) every WSL
+ * distro user home. Used so a Windows host can also pick up Claude Code data
+ * generated by sessions running inside WSL.
+ */
+async function claudeSubdirs(sub: string): Promise<string[]> {
+  const out: string[] = [];
+  const native = path.join(os.homedir(), '.claude', sub);
+  if (await exists(native)) out.push(native);
+  for (const d of await wslHomePaths(path.join('.claude', sub))) out.push(d);
+  return [...new Set(out)];
 }
 
 function normalizePath(p: string): string {

@@ -4,6 +4,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
+import { wslHomePaths } from './wsl.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 
@@ -11,7 +12,7 @@ export class OpenClawReader implements IReader {
   readonly source = 'openclaw' as const;
 
   async isInstalled(): Promise<boolean> {
-    return exists(path.join(os.homedir(), '.openclaw', 'agents'));
+    return (await agentsRoots()).length > 0;
   }
 
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
@@ -19,58 +20,73 @@ export class OpenClawReader implements IReader {
     const maxTurns = options.maxTurnsPerSession ?? DEFAULTS.maxTurns;
     const maxChars = options.maxCharsPerField ?? DEFAULTS.maxChars;
 
-    const agentsDir = path.join(os.homedir(), '.openclaw', 'agents');
-    if (!await exists(agentsDir)) return [];
+    const roots = await agentsRoots();
+    if (roots.length === 0) return [];
 
     const sessions: AgentSession[] = [];
 
-    try {
-      const agentDirs = await fs.readdir(agentsDir);
+    for (const agentsDir of roots) {
+      try {
+        const agentDirs = await fs.readdir(agentsDir);
 
-      for (const agentDir of agentDirs) {
-        const sessionsDir = path.join(agentsDir, agentDir, 'sessions');
-        if (!await exists(sessionsDir)) continue;
+        for (const agentDir of agentDirs) {
+          const sessionsDir = path.join(agentsDir, agentDir, 'sessions');
+          if (!await exists(sessionsDir)) continue;
 
-        const files = await fs.readdir(sessionsDir);
-        const jsonlFiles = files.filter(
-          (f) =>
-            (f.endsWith('.jsonl') && !f.endsWith('.trajectory.jsonl')) ||
-            f.includes('.jsonl.reset.'),
-        );
+          const files = await fs.readdir(sessionsDir);
+          const jsonlFiles = files.filter(
+            (f) =>
+              (f.endsWith('.jsonl') && !f.endsWith('.trajectory.jsonl')) ||
+              f.includes('.jsonl.reset.'),
+          );
 
-        const withMtime = await Promise.all(
-          jsonlFiles.map(async (f) => {
-            const fp = path.join(sessionsDir, f);
-            const s = await fs.stat(fp).catch(() => null);
-            return s ? { fp, mtime: s.mtime } : null;
-          }),
-        );
+          const withMtime = await Promise.all(
+            jsonlFiles.map(async (f) => {
+              const fp = path.join(sessionsDir, f);
+              const s = await fs.stat(fp).catch(() => null);
+              return s ? { fp, mtime: s.mtime } : null;
+            }),
+          );
 
-        const filtered = withMtime
-          .filter((x): x is NonNullable<typeof x> => {
-            if (!x) return false;
-            if (options.date) return isWithinDate(x.mtime, options.date);
-            return true;
-          })
-          .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
-          .slice(0, maxSessions);
+          const filtered = withMtime
+            .filter((x): x is NonNullable<typeof x> => {
+              if (!x) return false;
+              if (options.date) return isWithinDate(x.mtime, options.date);
+              return true;
+            })
+            .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+            .slice(0, maxSessions);
 
-        for (const { fp } of filtered) {
-          const session = await parseSession(fp, options.date, maxTurns, maxChars);
-          if (session) sessions.push(session);
+          for (const { fp } of filtered) {
+            const session = await parseSession(fp, options.date, maxTurns, maxChars);
+            if (session) sessions.push(session);
+            if (sessions.length >= maxSessions) break;
+          }
+
           if (sessions.length >= maxSessions) break;
         }
-
-        if (sessions.length >= maxSessions) break;
+      } catch {
+        // return empty on unreadable directories
       }
-    } catch {
-      // return empty on unreadable directories
+
+      if (sessions.length >= maxSessions) break;
     }
 
     return sessions
       .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
       .slice(0, maxSessions);
   }
+}
+
+async function agentsRoots(): Promise<string[]> {
+  const out: string[] = [];
+
+  const native = path.join(os.homedir(), '.openclaw', 'agents');
+  if (await exists(native)) out.push(native);
+
+  for (const d of await wslHomePaths(path.join('.openclaw', 'agents'))) out.push(d);
+
+  return [...new Set(out)];
 }
 
 async function parseSession(

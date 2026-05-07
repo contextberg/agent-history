@@ -4,15 +4,15 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
+import { wslHomePaths } from './wsl.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
-const SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions');
 
 export class CodexReader implements IReader {
   readonly source = 'codex' as const;
 
   async isInstalled(): Promise<boolean> {
-    return exists(SESSIONS_ROOT);
+    return (await sessionsRoots()).length > 0;
   }
 
   async read(options: ReaderOptions = {}): Promise<AgentSession[]> {
@@ -20,13 +20,14 @@ export class CodexReader implements IReader {
     const maxTurns = options.maxTurnsPerSession ?? DEFAULTS.maxTurns;
     const maxChars = options.maxCharsPerField ?? DEFAULTS.maxChars;
 
-    if (!await exists(SESSIONS_ROOT)) return [];
+    const roots = await sessionsRoots();
+    if (roots.length === 0) return [];
 
     const allFiles: { fp: string; mtime: Date }[] = [];
-    try {
-      await collectJsonlFiles(SESSIONS_ROOT, allFiles);
-    } catch {
-      return [];
+    for (const root of roots) {
+      try {
+        await collectJsonlFiles(root, allFiles);
+      } catch { /* skip unreadable root */ }
     }
 
     const filtered = allFiles
@@ -46,6 +47,14 @@ export class CodexReader implements IReader {
 
     return sessions.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
   }
+}
+
+async function sessionsRoots(): Promise<string[]> {
+  const out: string[] = [];
+  const native = path.join(os.homedir(), '.codex', 'sessions');
+  if (await exists(native)) out.push(native);
+  for (const d of await wslHomePaths(path.join('.codex', 'sessions'))) out.push(d);
+  return [...new Set(out)];
 }
 
 async function collectJsonlFiles(

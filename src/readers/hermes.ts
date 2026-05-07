@@ -1,14 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 
-const execFileAsync = promisify(execFile);
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
+import { wslHomePaths } from './wsl.js';
 
 type DatabaseSyncCtor = typeof import('node:sqlite').DatabaseSync;
 
@@ -570,42 +568,7 @@ async function sessionDirs(): Promise<string[]> {
   const homeDir = path.join(os.homedir(), '.hermes', 'sessions');
   if (await exists(homeDir)) dirs.push(homeDir);
 
-  if (process.platform === 'win32') {
-    for (const d of await wslSessionDirs()) dirs.push(d);
-  }
+  for (const d of await wslHomePaths(path.join('.hermes', 'sessions'))) dirs.push(d);
 
   return [...new Set(dirs)];
-}
-
-async function wslSessionDirs(): Promise<string[]> {
-  const out: string[] = [];
-
-  // Node cannot enumerate the UNC server root (\\wsl.localhost\), so we list
-  // distros via `wsl.exe -l -q` (UTF-16LE output) and probe each share.
-  const distros = await listWslDistros();
-  if (distros.length === 0) return out;
-
-  for (const distro of distros) {
-    const homeRoot = `\\\\wsl.localhost\\${distro}\\home`;
-    const entries = await fs.readdir(homeRoot, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const candidate = path.join(homeRoot, entry.name, '.hermes', 'sessions');
-      if (await exists(candidate)) out.push(candidate);
-    }
-  }
-  return out;
-}
-
-async function listWslDistros(): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync('wsl.exe', ['-l', '-q'], { encoding: 'buffer' });
-    return stdout
-      .toString('utf16le')
-      .split(/\r?\n/)
-      .map((s) => s.replace(/\0/g, '').trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
 }
