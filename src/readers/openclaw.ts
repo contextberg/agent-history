@@ -23,12 +23,13 @@ export class OpenClawReader implements IReader {
     const roots = await agentsRoots();
     if (roots.length === 0) return [];
 
-    const sessions: AgentSession[] = [];
+    // Collect candidates across all roots first; sorting/slicing afterwards
+    // ensures a saturated native root never starves WSL roots.
+    const candidates: { fp: string; mtime: Date }[] = [];
 
     for (const agentsDir of roots) {
       try {
         const agentDirs = await fs.readdir(agentsDir);
-
         for (const agentDir of agentDirs) {
           const sessionsDir = path.join(agentsDir, agentDir, 'sessions');
           if (!await exists(sessionsDir)) continue;
@@ -48,28 +49,25 @@ export class OpenClawReader implements IReader {
             }),
           );
 
-          const filtered = withMtime
-            .filter((x): x is NonNullable<typeof x> => {
-              if (!x) return false;
-              if (options.date) return isWithinDate(x.mtime, options.date);
-              return true;
-            })
-            .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
-            .slice(0, maxSessions);
-
-          for (const { fp } of filtered) {
-            const session = await parseSession(fp, options.date, maxTurns, maxChars);
-            if (session) sessions.push(session);
-            if (sessions.length >= maxSessions) break;
+          for (const c of withMtime) {
+            if (!c) continue;
+            if (options.date && !isWithinDate(c.mtime, options.date)) continue;
+            candidates.push(c);
           }
-
-          if (sessions.length >= maxSessions) break;
         }
       } catch {
         // return empty on unreadable directories
       }
+    }
 
-      if (sessions.length >= maxSessions) break;
+    const top = candidates
+      .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+      .slice(0, maxSessions);
+
+    const sessions: AgentSession[] = [];
+    for (const { fp } of top) {
+      const session = await parseSession(fp, options.date, maxTurns, maxChars);
+      if (session) sessions.push(session);
     }
 
     return sessions

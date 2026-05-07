@@ -1,3 +1,4 @@
+import { printBanner } from './banner.js';
 import { startMcpServer } from './mcp/server.js';
 import { startWebServer } from './server/index.js';
 
@@ -10,6 +11,7 @@ if (isMcp) {
     process.exit(1);
   });
 } else {
+  printBanner();
   startWebServer({ isDev }).catch((err) => {
     console.error('[agent-history] Failed to start server:', err);
     process.exit(1);

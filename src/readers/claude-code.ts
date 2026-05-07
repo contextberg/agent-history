@@ -33,12 +33,17 @@ export class ClaudeCodeReader implements IReader {
     const projectRoots = await claudeSubdirs('projects');
     if (projectRoots.length === 0) return [];
 
-    const parsed: ParsedSession[] = [];
+    // Walk every (root × project) and collect candidate jsonl files with their
+    // mtime first; only after we have the full picture do we sort across roots
+    // and pick the most-recent maxSessions to actually parse. Without this,
+    // a native install with many sessions can saturate before we ever reach
+    // a WSL root.
+    type Candidate = { fp: string; mtime: Date; projectName: string };
+    const candidates: Candidate[] = [];
 
     for (const claudeDir of projectRoots) {
       try {
         const projectDirs = await fs.readdir(claudeDir);
-
         for (const dirName of projectDirs) {
           const projectDir = path.join(claudeDir, dirName);
           const stat = await fs.stat(projectDir).catch(() => null);
@@ -52,32 +57,29 @@ export class ClaudeCodeReader implements IReader {
             jsonlFiles.map(async (f) => {
               const fp = path.join(projectDir, f);
               const s = await fs.stat(fp).catch(() => null);
-              return s ? { fp, mtime: s.mtime } : null;
+              return s ? { fp, mtime: s.mtime, projectName } : null;
             }),
           );
 
-          const filtered = withMtime
-            .filter((x): x is NonNullable<typeof x> => {
-              if (!x) return false;
-              if (options.date) return isWithinDate(x.mtime, options.date);
-              return true;
-            })
-            .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
-            .slice(0, maxSessions);
-
-          for (const { fp } of filtered) {
-            const result = await parseSession(fp, projectName, options.date, maxTurns, maxChars);
-            if (result) parsed.push(result);
-            if (parsed.length >= maxSessions) break;
+          for (const c of withMtime) {
+            if (!c) continue;
+            if (options.date && !isWithinDate(c.mtime, options.date)) continue;
+            candidates.push(c);
           }
-
-          if (parsed.length >= maxSessions) break;
         }
       } catch {
         // ディレクトリが読めない環境ではスキップして次のルートへ
       }
+    }
 
-      if (parsed.length >= maxSessions) break;
+    const top = candidates
+      .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+      .slice(0, maxSessions);
+
+    const parsed: ParsedSession[] = [];
+    for (const { fp, projectName } of top) {
+      const result = await parseSession(fp, projectName, options.date, maxTurns, maxChars);
+      if (result) parsed.push(result);
     }
 
     // Side-channel metadata: PID registry + IDE bridge locks. Both are runtime
