@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import type { DatabaseSync } from 'node:sqlite';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
 
@@ -15,6 +16,8 @@ interface ComposerSummary {
   lastUpdatedAt: number;
   headers: ConversationHeader[];
 }
+
+type DatabaseSyncCtor = typeof import('node:sqlite').DatabaseSync;
 
 export class CursorReader implements IReader {
   readonly source = 'cursor' as const;
@@ -31,16 +34,21 @@ export class CursorReader implements IReader {
     const dbp = dbPath();
     if (!await exists(dbp)) return [];
 
-    let Database: typeof import('better-sqlite3');
+    // node:sqlite is stable in Node 23.7+ / 24+. On older Node it either
+    // throws (no module) or is gated behind --experimental-sqlite — degrade
+    // silently in either case. The specifier is built indirectly so esbuild
+    // does not rewrite the `node:` prefix during bundling.
+    let Database: DatabaseSyncCtor;
     try {
-      Database = (await import('better-sqlite3')).default;
+      const mod = (await import(nodeSqliteSpecifier())) as typeof import('node:sqlite');
+      Database = mod.DatabaseSync;
     } catch {
       return [];
     }
 
-    let db: import('better-sqlite3').Database;
+    let db: DatabaseSync;
     try {
-      db = new Database(dbp, { readonly: true, fileMustExist: true });
+      db = new Database(dbp, { readOnly: true });
     } catch {
       return [];
     }
@@ -105,7 +113,7 @@ export class CursorReader implements IReader {
  * we managed to read).
  */
 async function loadComposerToCwd(
-  Database: typeof import('better-sqlite3'),
+  Database: DatabaseSyncCtor,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const wsRoot = workspaceStorageRoot();
@@ -129,8 +137,8 @@ async function loadComposerToCwd(
 
     const dbPath = path.join(wsRoot, d, 'state.vscdb');
     if (!await exists(dbPath)) continue;
-    let wdb: import('better-sqlite3').Database;
-    try { wdb = new Database(dbPath, { readonly: true, fileMustExist: true }); } catch { continue; }
+    let wdb: DatabaseSync;
+    try { wdb = new Database(dbPath, { readOnly: true }); } catch { continue; }
     try {
       const row = wdb
         .prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'")
@@ -168,7 +176,7 @@ function workspaceStorageRoot(): string {
 
 function parseComposer(
   c: ComposerSummary,
-  db: import('better-sqlite3').Database,
+  db: DatabaseSync,
   maxTurns: number,
   maxChars: number,
   cwd: string | undefined,
@@ -408,4 +416,8 @@ function numberOr(v: unknown, fallback: number): number {
 
 async function exists(p: string): Promise<boolean> {
   return fs.access(p).then(() => true).catch(() => false);
+}
+
+function nodeSqliteSpecifier(): string {
+  return 'node:sqlite';
 }

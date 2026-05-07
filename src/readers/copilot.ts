@@ -75,15 +75,24 @@ export class CopilotReader implements IReader {
         }
       }
 
-      // Empty-window sessions: globalStorage/emptyWindowChatSessions/*.json
+      // Empty-window sessions: globalStorage/emptyWindowChatSessions/*.{jsonl,json}
       const emptyDir = path.join(userDir, 'globalStorage', 'emptyWindowChatSessions');
       const emptyFiles = await fs.readdir(emptyDir, { withFileTypes: true }).catch(() => []);
       for (const f of emptyFiles) {
-        if (!f.isFile() || !f.name.endsWith('.json')) continue;
+        if (!f.isFile()) continue;
+        const isJsonl = f.name.endsWith('.jsonl');
+        const isJson = !isJsonl && f.name.endsWith('.json');
+        if (!isJsonl && !isJson) continue;
         const fp = path.join(emptyDir, f.name);
         const stat = await fs.stat(fp).catch(() => null);
         if (!stat) continue;
-        candidates.push({ fp, mtime: stat.mtime, project: '(no workspace)', cwd: null, format: 'json' });
+        candidates.push({
+          fp,
+          mtime: stat.mtime,
+          project: '(no workspace)',
+          cwd: null,
+          format: isJsonl ? 'jsonl' : 'json',
+        });
       }
     }
 

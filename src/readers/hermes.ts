@@ -4,10 +4,13 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
+import type { DatabaseSync } from 'node:sqlite';
 
 const execFileAsync = promisify(execFile);
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
+
+type DatabaseSyncCtor = typeof import('node:sqlite').DatabaseSync;
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 
@@ -324,9 +327,11 @@ async function loadAllStateDbs(
   maxTurns: number,
   maxChars: number,
 ): Promise<AgentSession[]> {
-  let Database: typeof import('better-sqlite3');
+  let Database: DatabaseSyncCtor;
   try {
-    Database = (await import('better-sqlite3')).default;
+    const specifier = 'node:sqlite';
+    const mod = (await import(specifier)) as typeof import('node:sqlite');
+    Database = mod.DatabaseSync;
   } catch {
     return [];
   }
@@ -348,7 +353,7 @@ async function loadAllStateDbs(
 }
 
 async function loadOneStateDb(
-  Database: typeof import('better-sqlite3'),
+  Database: DatabaseSyncCtor,
   dbPath: string,
   maxTurns: number,
   maxChars: number,
@@ -361,9 +366,9 @@ async function loadOneStateDb(
     return [];
   }
 
-  let db: import('better-sqlite3').Database;
+  let db: DatabaseSync;
   try {
-    db = new Database(tmpPath, { readonly: true, fileMustExist: true });
+    db = new Database(tmpPath, { readOnly: true });
   } catch {
     fs.unlink(tmpPath).catch(() => undefined);
     return [];
@@ -374,7 +379,7 @@ async function loadOneStateDb(
       .prepare(
         'SELECT id, started_at, ended_at, parent_session_id, title FROM sessions ORDER BY started_at DESC',
       )
-      .all() as StateDbSessionRow[];
+      .all() as unknown as StateDbSessionRow[];
 
     const out: AgentSession[] = [];
     for (const row of sessRows) {
@@ -382,7 +387,7 @@ async function loadOneStateDb(
         .prepare(
           'SELECT role, content, tool_calls, tool_call_id, timestamp FROM messages WHERE session_id = ? ORDER BY id ASC',
         )
-        .all(row.id) as StateDbMessageRow[];
+        .all(row.id) as unknown as StateDbMessageRow[];
       const session = buildSessionFromDbRows(row, msgs, maxTurns, maxChars);
       if (session) out.push(session);
     }
