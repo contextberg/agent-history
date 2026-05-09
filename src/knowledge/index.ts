@@ -9,7 +9,7 @@ import { DEFAULT_SYSTEM_PROMPT } from './extractor.js';
 import { storeKnowledge } from './store.js';
 import { writeLinkCache } from './link-cache.js';
 import { buildPrompt } from './transcripts.js';
-import { callProvider, getOverlay, resolveAuth } from './providers/index.js';
+import { callProvider, findModel, getProfile, resolveAuth } from './providers/index.js';
 import { inspectCommit, filterDiff } from './commit-filter.js';
 
 const execFileAsync = promisify(execFile);
@@ -132,16 +132,17 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
 
   // API auth comes after the cheap filter — no point validating creds for a
   // commit we'd skip anyway.
-  const overlay = getOverlay(k.provider);
-  const auth = await resolveAuth(overlay, k.apiKey);
+  const profile = getProfile(k.provider);
+  const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
+    const envHint = profile.envVars[0] ?? 'an API key';
+    const oauthHint = profile.authType === 'oauth_disk' ? ' or run `codex login`' : '';
     console.error(
-      `[contextberg] No credentials for ${overlay.displayName}. Set ${overlay.apiKeyEnv}` +
-        (overlay.resolveTokenFromDisk ? ' or run `codex login`' : '') +
-        ', or run `contextberg setup`.',
+      `[contextberg] No credentials for ${profile.displayName}. Set ${envHint}${oauthHint}, or run \`contextberg setup\`.`,
     );
     process.exit(1);
   }
+  const model = findModel(profile, k.model);
 
   log(`Processing commit ${sha.slice(0, 8)} in ${repo}`, verbose);
   const meta = await getCommitMeta(repo, sha).catch(() => ({
@@ -215,14 +216,13 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     maxTotalChars: k.maxPromptChars ?? 18000,
   });
 
-  log(`Calling ${overlay.displayName} (${k.model})…`, verbose);
+  log(`Calling ${profile.displayName} (${model.id})…`, verbose);
   const result = await callProvider({
-    overlay,
-    model: k.model,
+    profile,
+    model,
     systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
     userContent,
-    apiKey: auth.apiKey,
-    baseURL: auth.baseURL,
+    auth,
     maxTokens: k.maxOutputTokens ?? 2048,
   });
 

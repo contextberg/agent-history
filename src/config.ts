@@ -2,18 +2,32 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-export type KnowledgeProvider = 'anthropic' | 'openai' | 'google' | 'codex';
+export type KnowledgeProvider =
+  | 'anthropic'
+  | 'openai'
+  | 'google'
+  | 'openrouter'
+  | 'codex'
+  | 'ollama'
+  | 'lmstudio'
+  | 'deepseek'
+  | 'xai';
 
 export interface KnowledgeConfig {
   enabled: boolean;
   provider: KnowledgeProvider;
   model: string;
   /**
-   * API key (plain text). Corresponding env var takes priority:
-   *   anthropic → ANTHROPIC_API_KEY
-   *   openai    → OPENAI_API_KEY
-   *   google    → GEMINI_API_KEY
-   *   codex     → CODEX_API_KEY (or ~/.codex/auth.json OAuth)
+   * API key (plain text). Each provider's env vars take priority:
+   *   anthropic  → ANTHROPIC_API_KEY
+   *   openai     → OPENAI_API_KEY
+   *   google     → GEMINI_API_KEY / GOOGLE_API_KEY
+   *   openrouter → OPENROUTER_API_KEY
+   *   codex      → CODEX_API_KEY (or ~/.codex/auth.json OAuth)
+   *   deepseek   → DEEPSEEK_API_KEY
+   *   xai        → XAI_API_KEY
+   *   ollama     → none (local)
+   *   lmstudio   → none (local)
    */
   apiKey?: string;
   /** Path relative to repo root, or absolute. */
@@ -57,7 +71,7 @@ export const CONFIG_DEFAULTS: AgentHistoryConfig = {
   knowledge: {
     enabled: true,
     provider: 'anthropic',
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-5',
     outputDir: '.contextberg/knowledge',
     maxSessionsPerCommit: 3,
     maxPromptChars: 18000,

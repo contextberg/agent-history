@@ -1,7 +1,14 @@
-import readline from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
 import type { KnowledgeProvider } from '../config.js';
-import { listProviders, getOverlay } from '../knowledge/providers/index.js';
+import { listProfiles, getProfile } from '../knowledge/providers/index.js';
+import {
+  createInterface,
+  isInteractiveStdin,
+  printHeader,
+  printNonInteractiveGuidance,
+  prompt,
+  promptApiKey,
+  promptChoice,
+} from './prompts.js';
 
 export interface WizardResult {
   provider: KnowledgeProvider;
@@ -11,70 +18,84 @@ export interface WizardResult {
   maxSessionsPerCommit: number;
 }
 
-function printMenu(items: string[]): void {
-  items.forEach((item, i) => console.log(`  ${i + 1}) ${item}`));
-}
-
-async function pickFromList(rl: readline.Interface, prompt: string, items: string[]): Promise<number> {
-  while (true) {
-    printMenu(items);
-    const raw = await rl.question(`${prompt} [1-${items.length}]: `);
-    const n = parseInt(raw.trim(), 10);
-    if (n >= 1 && n <= items.length) return n - 1;
-    console.log(`  Please enter a number between 1 and ${items.length}.`);
-  }
-}
-
-async function ask(rl: readline.Interface, prompt: string, defaultValue?: string): Promise<string> {
-  const hint = defaultValue ? ` (${defaultValue})` : '';
-  const raw = await rl.question(`${prompt}${hint}: `);
-  return raw.trim() || defaultValue || '';
-}
-
 export async function runWizard(): Promise<WizardResult> {
-  const rl = readline.createInterface({ input, output });
+  if (!isInteractiveStdin()) {
+    printNonInteractiveGuidance();
+    throw new Error('contextberg setup requires an interactive terminal');
+  }
+
+  const rl = createInterface();
   try {
-    console.log('\nSelect provider:');
-    const overlays = listProviders();
-    const labels = overlays.map((o) => `${o.displayName}  [${o.apiKeyEnv}]`);
-    const pi = await pickFromList(rl, 'Provider', labels);
-    const overlay = overlays[pi]!;
-    const provider = overlay.id;
+    // ── Provider ──────────────────────────────────────────────
+    printHeader('Provider');
+    const profiles = listProfiles();
+    const providerId = await promptChoice(
+      rl,
+      'Pick a provider',
+      profiles.map((p) => ({
+        label: `${p.displayName}`,
+        description: p.description,
+        value: p.id,
+      })),
+    );
+    const profile = getProfile(providerId);
 
-    console.log('\nSelect model:');
-    const mi = await pickFromList(rl, 'Model', overlay.models);
-    const model = overlay.models[mi]!;
+    // ── Model ─────────────────────────────────────────────────
+    printHeader('Model');
+    const model = await promptChoice(
+      rl,
+      'Pick a model',
+      profile.fallbackModels.map((m) => ({
+        label: `${m.id}${m.recommended ? ' (recommended)' : ''}`,
+        ...(m.notes ? { description: m.notes } : {}),
+        value: m.id,
+      })),
+    );
 
+    // ── Auth ──────────────────────────────────────────────────
+    printHeader('Authentication');
     let apiKey: string | undefined;
-    const envVal = process.env[overlay.apiKeyEnv];
 
-    if (envVal) {
-      console.log(`\n  ${overlay.apiKeyEnv} is already set — using it.`);
-    } else if (overlay.id === 'codex') {
-      const stored = overlay.resolveTokenFromDisk ? await overlay.resolveTokenFromDisk() : null;
-      if (stored) {
-        console.log('\n  Codex CLI auth detected at ~/.codex/auth.json — using it.');
-      } else {
-        const raw = await rl.question(`\nEnter ${overlay.apiKeyEnv} or run \`codex login\` later (blank to skip): `);
-        apiKey = raw.trim() || undefined;
-      }
+    if (profile.authType === 'none') {
+      console.log(`\n  ${profile.displayName} runs locally — no auth required.`);
+      console.log(`  Make sure the server is running at ${profile.baseURL}`);
     } else {
-      const raw = await rl.question(`\nEnter ${overlay.apiKeyEnv} (leave blank to set later): `);
-      apiKey = raw.trim() || undefined;
+      // 1. Env var already set?
+      const envHit = profile.envVars.find((v) => process.env[v]);
+      if (envHit) {
+        console.log(`\n  ${envHit} is already set — using it.`);
+      } else {
+        // 2. On-disk credential (Codex)?
+        const detected = await profile.hooks?.detectAuth?.();
+        if (detected) {
+          console.log(`\n  Detected ${detected.label} — using it.`);
+        } else {
+          // 3. Prompt for the key.
+          const envHint = profile.envVars[0] ?? 'API key';
+          const promptText =
+            profile.authType === 'oauth_disk'
+              ? `Enter ${envHint} or run \`codex login\` later (blank to skip)`
+              : `Enter ${envHint} (blank to set later)`;
+          const raw = await promptApiKey(rl, promptText);
+          apiKey = raw || undefined;
+          if (profile.signupUrl && !apiKey) {
+            console.log(`  Get one at: ${profile.signupUrl}`);
+          }
+        }
+      }
     }
 
-    const outputDir = await ask(rl, '\nKnowledge output dir (relative to repo root)', '.contextberg/knowledge');
-
-    const maxRaw = await ask(rl, 'Max sessions per commit', '3');
+    // ── Storage ───────────────────────────────────────────────
+    printHeader('Storage');
+    const outputDir = await prompt(
+      rl,
+      'Knowledge output dir (relative to repo root)',
+      '.contextberg/knowledge',
+    );
+    const maxRaw = await prompt(rl, 'Max sessions per commit', '3');
     const maxSessionsPerCommit = Math.max(1, parseInt(maxRaw, 10) || 3);
 
-    // Side-effect-free check just so we can warn the user up front.
-    const overlayCheck = getOverlay(provider);
-    if (overlayCheck.transport === 'openai_responses') {
-      console.log('\n  Note: Codex requires the Responses API; ensure your subscription supports it.');
-    }
-
-    return { provider, model, apiKey, outputDir, maxSessionsPerCommit };
+    return { provider: providerId, model, apiKey, outputDir, maxSessionsPerCommit };
   } finally {
     rl.close();
   }
