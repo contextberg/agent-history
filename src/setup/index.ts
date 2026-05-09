@@ -26,6 +26,8 @@ export async function runSetup(): Promise<void> {
     model: result.model,
     outputDir: result.outputDir,
     maxSessionsPerCommit: result.maxSessionsPerCommit,
+    maxPromptChars: result.maxPromptChars,
+    maxOutputTokens: result.maxOutputTokens,
   };
   if (finalApiKey) next.apiKey = finalApiKey;
   else delete next.apiKey;

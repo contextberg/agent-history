@@ -73,9 +73,12 @@ export const CONFIG_DEFAULTS: AgentHistoryConfig = {
     provider: 'anthropic',
     model: 'claude-sonnet-4-5',
     outputDir: '.contextberg/knowledge',
-    maxSessionsPerCommit: 3,
-    maxPromptChars: 18000,
-    maxOutputTokens: 2048,
+    maxSessionsPerCommit: 5,
+    // ~100k tokens of input — generous default that fits comfortably inside
+    // ChatGPT-subscription quotas and any modern provider's context window.
+    // Per-model caps still apply via callOpenAIChat / clampMaxTokens.
+    maxPromptChars: 400_000,
+    maxOutputTokens: 4096,
   },
 };
 

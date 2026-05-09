@@ -19,6 +19,8 @@ export interface WizardResult {
   apiKey: string | undefined;
   outputDir: string;
   maxSessionsPerCommit: number;
+  maxPromptChars: number;
+  maxOutputTokens: number;
 }
 
 export interface WizardOptions {
@@ -198,11 +200,30 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
     const maxRaw = await prompt(
       rl,
       'Max sessions per commit',
-      String(current?.maxSessionsPerCommit ?? 3),
+      String(current?.maxSessionsPerCommit ?? 5),
     );
-    const maxSessionsPerCommit = Math.max(1, parseInt(maxRaw, 10) || 3);
+    const maxSessionsPerCommit = Math.max(1, parseInt(maxRaw, 10) || 5);
 
-    return { provider: providerId, model, apiKey, outputDir, maxSessionsPerCommit };
+    // Expose the prompt-size cap so subscription users can lift it; we work
+    // in chars internally (≈ tokens × 4) but show tokens to the user since
+    // that's the unit they actually reason about for context windows.
+    const currentTokens = Math.round((current?.maxPromptChars ?? 400_000) / 4);
+    const promptTokensRaw = await prompt(
+      rl,
+      'Max prompt tokens per commit (rough cap)',
+      String(currentTokens),
+    );
+    const maxPromptTokens = Math.max(1000, parseInt(promptTokensRaw, 10) || currentTokens);
+    const maxPromptChars = maxPromptTokens * 4;
+
+    const outRaw = await prompt(
+      rl,
+      'Max output tokens per call (clamped per-model)',
+      String(current?.maxOutputTokens ?? 4096),
+    );
+    const maxOutputTokens = Math.max(256, parseInt(outRaw, 10) || 4096);
+
+    return { provider: providerId, model, apiKey, outputDir, maxSessionsPerCommit, maxPromptChars, maxOutputTokens };
   } finally {
     rl.close();
   }
