@@ -66,8 +66,14 @@ export interface ProviderHooks {
   buildHeaders?: (auth: ResolvedAuth) => Record<string, string>;
   /** Mutate request kwargs just before the call (Codex: drop max_tokens/temperature). */
   prepareRequest?: (kwargs: Record<string, unknown>) => Record<string, unknown>;
-  /** Live-fetch model IDs (OpenRouter catalog, Codex /models, Ollama /api/tags). */
-  fetchModels?: (auth: ResolvedAuth | null) => Promise<string[] | null>;
+  /**
+   * Live-fetch model IDs from the provider's catalog endpoint. THROWS on
+   * failure so the wizard can surface the real reason (HTTP status, API
+   * error message) instead of silently falling back. A successful fetch
+   * may legitimately return `[]` (account has zero matching models), which
+   * the wizard treats as "use fallbacks" without an error message.
+   */
+  fetchModels?: (auth: ResolvedAuth | null) => Promise<string[]>;
   /** Detect existing on-disk credentials before prompting the user. */
   detectAuth?: () => Promise<DetectedAuth | null>;
   /**

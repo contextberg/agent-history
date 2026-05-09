@@ -201,7 +201,13 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
       const auth = liveAuthToken
         ? { apiKey: liveAuthToken, baseURL: profile.baseURL, source: 'wizard' }
         : null;
-      const live = await profile.hooks.fetchModels(auth).catch(() => null);
+      let live: string[] | null = null;
+      let fetchError: string | null = null;
+      try {
+        live = await profile.hooks.fetchModels(auth);
+      } catch (err) {
+        fetchError = err instanceof Error ? err.message : String(err);
+      }
       if (live && live.length > 0) {
         const recommended = profile.fallbackModels.find((m) => m.recommended)?.id;
         modelChoices = live.slice(0, 30).map((id) => {
@@ -214,8 +220,13 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
           };
         });
         console.log(`  (Live: ${live.length} models from ${profile.displayName})`);
+      } else if (fetchError) {
+        console.log(`  (Live fetch failed — falling back to ${profile.fallbackModels.length} curated models)`);
+        console.log(`    Reason: ${fetchError}`);
+      } else if (live && live.length === 0) {
+        console.log(`  (Live fetch returned 0 models — falling back to ${profile.fallbackModels.length} curated)`);
       } else {
-        console.log(`  (Using ${profile.fallbackModels.length} fallback models — live fetch unavailable)`);
+        console.log(`  (Using ${profile.fallbackModels.length} fallback models)`);
       }
     }
 

@@ -130,83 +130,83 @@ function rankOpenAIChatModel(id: string): number {
   return 100;
 }
 
-async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Promise<string[] | null> {
-  if (!auth) return null;
+/**
+ * Format an HTTP error into something the wizard can show the user
+ * verbatim. Includes status, status text, and the first chunk of the body
+ * so 401 "API key not valid" type messages reach the surface instead of
+ * dying silently.
+ */
+async function httpFail(res: Response, label: string): Promise<never> {
+  let body = '';
   try {
-    const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
-      headers: { Authorization: `Bearer ${auth.apiKey}` },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { data?: Array<{ id?: string }> };
-    return (data.data ?? [])
-      .map((m) => m.id)
-      .filter((id): id is string => typeof id === 'string' && isOpenAIChatModel(id))
-      .sort((a, b) => rankOpenAIChatModel(a) - rankOpenAIChatModel(b) || a.localeCompare(b));
-  } catch {
-    return null;
-  }
+    body = await res.text();
+  } catch { /* ignore */ }
+  // Trim a typical Google error JSON down to its message field if present.
+  let trimmed = body.slice(0, 240);
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    if (parsed.error?.message) trimmed = parsed.error.message;
+  } catch { /* not JSON, use raw */ }
+  throw new Error(`${label}: HTTP ${res.status} ${res.statusText}${trimmed ? ` — ${trimmed}` : ''}`);
 }
 
-async function fetchGeminiModels(auth: ResolvedAuth | null): Promise<string[] | null> {
-  if (!auth) return null;
-  try {
-    // Use the NATIVE listing endpoint, not the /openai/ compat path —
-    // the latter often 404s or returns an empty list on this account, while
-    // the native one exposes supportedGenerationMethods so we can filter
-    // out tuned-model and non-generateContent entries cleanly.
-    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(auth.apiKey)}&pageSize=200`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      models?: Array<{
-        name?: string;
-        displayName?: string;
-        supportedGenerationMethods?: string[];
-      }>;
-    };
-    return (data.models ?? [])
-      .filter((mObj) => mObj.supportedGenerationMethods?.includes('generateContent'))
-      .map((mObj) => mObj.name?.replace(/^models\//, ''))
-      .filter((id): id is string => !!id && id.startsWith('gemini-'))
-      // Skip dated suffixes that just duplicate the unversioned base
-      // (e.g. gemini-2.5-pro-001 next to gemini-2.5-pro).
-      .filter((id) => !/-\d{3}$/.test(id))
-      .sort((a, b) => b.localeCompare(a));  // newest version names sort first
-  } catch {
-    return null;
-  }
+async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Promise<string[]> {
+  if (!auth || !auth.apiKey) throw new Error('no API key configured');
+  const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
+    headers: { Authorization: `Bearer ${auth.apiKey}` },
+  });
+  if (!res.ok) await httpFail(res, 'OpenAI /models');
+  const data = (await res.json()) as { data?: Array<{ id?: string }> };
+  return (data.data ?? [])
+    .map((m) => m.id)
+    .filter((id): id is string => typeof id === 'string' && isOpenAIChatModel(id))
+    .sort((a, b) => rankOpenAIChatModel(a) - rankOpenAIChatModel(b) || a.localeCompare(b));
 }
 
-async function fetchCodexModels(auth: ResolvedAuth | null): Promise<string[] | null> {
-  if (!auth) return null;
-  try {
-    const res = await fetch(`${CODEX_BASE_URL}/models?client_version=1.0.0`, {
-      headers: { Authorization: `Bearer ${auth.apiKey}`, ...codexHeaders(auth) },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      models?: Array<{ slug?: string; supported_in_api?: boolean; visibility?: string; priority?: number }>;
-    };
-    const filtered = (data.models ?? [])
-      .filter((m) => m.supported_in_api !== false)
-      .filter((m) => !['hide', 'hidden'].includes((m.visibility ?? '').toLowerCase()))
-      .filter((m): m is { slug: string; priority?: number } => typeof m.slug === 'string' && !!m.slug)
-      .sort((a, b) => (a.priority ?? 10000) - (b.priority ?? 10000));
-    return filtered.map((m) => m.slug);
-  } catch {
-    return null;
-  }
+async function fetchGeminiModels(auth: ResolvedAuth | null): Promise<string[]> {
+  if (!auth || !auth.apiKey) throw new Error('no API key configured');
+  // Native listing endpoint — exposes supportedGenerationMethods which the
+  // /openai/ compat path doesn't.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(auth.apiKey)}&pageSize=200`;
+  const res = await fetch(url);
+  if (!res.ok) await httpFail(res, 'Gemini /models');
+  const data = (await res.json()) as {
+    models?: Array<{
+      name?: string;
+      displayName?: string;
+      supportedGenerationMethods?: string[];
+    }>;
+  };
+  return (data.models ?? [])
+    .filter((mObj) => mObj.supportedGenerationMethods?.includes('generateContent'))
+    .map((mObj) => mObj.name?.replace(/^models\//, ''))
+    .filter((id): id is string => !!id && id.startsWith('gemini-'))
+    .filter((id) => !/-\d{3}$/.test(id))
+    .sort((a, b) => b.localeCompare(a));
 }
 
-async function fetchOpenRouterModels(): Promise<string[] | null> {
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/models');
-    if (!res.ok) return null;
-    const data = (await res.json()) as { data?: Array<{ id?: string }> };
-    return (data.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
-  } catch {
-    return null;
-  }
+async function fetchCodexModels(auth: ResolvedAuth | null): Promise<string[]> {
+  if (!auth || !auth.apiKey) throw new Error('no auth — sign in via setup');
+  const res = await fetch(`${CODEX_BASE_URL}/models?client_version=1.0.0`, {
+    headers: { Authorization: `Bearer ${auth.apiKey}`, ...codexHeaders(auth) },
+  });
+  if (!res.ok) await httpFail(res, 'Codex /models');
+  const data = (await res.json()) as {
+    models?: Array<{ slug?: string; supported_in_api?: boolean; visibility?: string; priority?: number }>;
+  };
+  return (data.models ?? [])
+    .filter((mm) => mm.supported_in_api !== false)
+    .filter((mm) => !['hide', 'hidden'].includes((mm.visibility ?? '').toLowerCase()))
+    .filter((mm): mm is { slug: string; priority?: number } => typeof mm.slug === 'string' && !!mm.slug)
+    .sort((a, b) => (a.priority ?? 10000) - (b.priority ?? 10000))
+    .map((mm) => mm.slug);
+}
+
+async function fetchOpenRouterModels(): Promise<string[]> {
+  const res = await fetch('https://openrouter.ai/api/v1/models');
+  if (!res.ok) await httpFail(res, 'OpenRouter /models');
+  const data = (await res.json()) as { data?: Array<{ id?: string }> };
+  return (data.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
 }
 
 // ── Model catalogs (fallback when live fetch fails) ────────────────────────
