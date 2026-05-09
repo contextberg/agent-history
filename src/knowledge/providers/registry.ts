@@ -57,7 +57,13 @@ const codexHooks: ProviderHooks = {
   // the backend with a bespoke fetch and never sends max_output_tokens or
   // temperature in the first place.
   detectAuth: async () => {
-    const candidates = [path.join(os.homedir(), '.codex', 'auth.json')];
+    // Order matters: prefer our own credentials (we own the refresh lifecycle)
+    // over the upstream codex CLI's. Hermes notes refresh_token are single-use,
+    // so reading both back and forth would race.
+    const candidates = [
+      path.join(os.homedir(), '.agent-history', 'codex-auth.json'),
+      path.join(os.homedir(), '.codex', 'auth.json'),
+    ];
     for (const file of candidates) {
       try {
         const raw = await fs.readFile(file, 'utf-8');
@@ -69,7 +75,7 @@ const codexHooks: ProviderHooks = {
             : undefined) ?? data['OPENAI_API_KEY'];
         if (typeof access === 'string' && access) {
           const detected: DetectedAuth = {
-            source: 'codex_cli',
+            source: file.includes('agent-history') ? 'contextberg_oauth' : 'codex_cli',
             label: file.replace(os.homedir(), '~'),
             resolve: async () => access,
           };
@@ -78,6 +84,13 @@ const codexHooks: ProviderHooks = {
       } catch { /* try next */ }
     }
     return null;
+  },
+  interactiveAuth: async () => {
+    // Lazy-import the OAuth helper so the registry stays free of node:fs at
+    // module init time (matters for the MCP entry point that doesn't need it).
+    const { runCodexDeviceCodeLogin } = await import('../../setup/codex-oauth.js');
+    const creds = await runCodexDeviceCodeLogin();
+    return creds.tokens.access_token;
   },
 };
 

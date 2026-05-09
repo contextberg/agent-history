@@ -74,6 +74,13 @@ export interface ProviderHooks {
   fetchModels?: (auth: ResolvedAuth | null) => Promise<string[] | null>;
   /** Detect existing on-disk credentials before prompting the user. */
   detectAuth?: () => Promise<DetectedAuth | null>;
+  /**
+   * Run an interactive sign-in flow when no credentials exist (e.g. Codex
+   * device-code OAuth). Prints URL+code to stdout and waits for the user.
+   * Returns the resulting bearer token. The hook is responsible for
+   * persisting the credential so detectAuth picks it up next time.
+   */
+  interactiveAuth?: () => Promise<string | null>;
 }
 
 export interface ProviderProfile {

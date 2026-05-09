@@ -1,6 +1,5 @@
 import { loadConfig } from '../config.js';
 import { callProvider, findModel, getProfile, resolveAuth } from '../knowledge/providers/index.js';
-import { authMissingHint } from './auth-help.js';
 
 /**
  * Smoke test: send a one-shot prompt to the configured provider and print
@@ -19,7 +18,10 @@ export async function runTest(): Promise<void> {
   const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
     console.error(`  Auth     : NOT set\n`);
-    console.error(authMissingHint(profile));
+    if (profile.signupUrl) console.error(`  Get a key at: ${profile.signupUrl}`);
+    const envHint = profile.envVars[0];
+    if (envHint) console.error(`  Then set ${envHint} in your environment`);
+    console.error(`  …or run \`contextberg setup\` to save credentials interactively.`);
     process.exit(1);
   }
   console.log(`  Auth     : ${auth.source}\n`);

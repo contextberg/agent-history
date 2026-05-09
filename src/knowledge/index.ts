@@ -157,8 +157,14 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   const profile = getProfile(k.provider);
   const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
-    const { authMissingHint } = await import('../setup/auth-help.js');
-    console.error(`[contextberg] ${authMissingHint(profile)}`);
+    const envHint = profile.envVars[0];
+    const lines = [
+      `No credentials for ${profile.displayName}.`,
+      profile.signupUrl ? `  Get a key at: ${profile.signupUrl}` : null,
+      envHint ? `  Then set ${envHint} in your environment` : null,
+      `  …or run \`contextberg setup\` to save credentials interactively.`,
+    ].filter(Boolean) as string[];
+    console.error(`[contextberg] ${lines.join('\n  ')}`);
     await finish(sha, 'no-auth', { provider: k.provider }, `missing credentials for ${profile.id}`);
     process.exit(1);
   }
