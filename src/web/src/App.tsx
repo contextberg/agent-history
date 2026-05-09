@@ -95,13 +95,6 @@ export function App() {
   }
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      fetch('/api/heartbeat', { method: 'POST' }).catch(() => {});
-    }, 5000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
 
     const refresh = (showSpinner: boolean) => {

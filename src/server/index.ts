@@ -3,16 +3,12 @@ import staticPlugin from '@fastify/static';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
 import open from 'open';
 import { AgentHistoryService } from '../readers/index.js';
 import type { AgentSource, ReaderOptions } from '../readers/index.js';
 import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
 import { aggregateCommits } from './commits.js';
-
-const execAsync = promisify(exec);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.join(__dirname, 'web');
@@ -76,14 +72,13 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     return updated;
   });
 
-  let lastHeartbeat = Date.now();
-  app.post('/api/heartbeat', async (_req, reply) => {
-    lastHeartbeat = Date.now();
-    reply.status(204).send();
-  });
-  setInterval(() => {
-    if (Date.now() - lastHeartbeat > 15_000) process.exit(0);
-  }, 5_000).unref();
+  const shutdown = async (signal: NodeJS.Signals) => {
+    process.stdout.write(`\n[agent-history] ${signal} received, releasing port...\n`);
+    try { await app.close(); } catch { /* ignore */ }
+    process.exit(0);
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
 
   if (!isDev) {
     await app.register(staticPlugin, { root: WEB_DIST, prefix: '/' });
@@ -109,43 +104,21 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
   }
 }
 
-async function killPortRange(startPort: number, count: number): Promise<void> {
-  const ports = Array.from({ length: count }, (_, i) => startPort + i);
-  if (process.platform === 'win32') {
-    for (const port of ports) {
-      try {
-        const { stdout } = await execAsync(`netstat -ano | findstr :${port}`);
-        for (const line of stdout.trim().split('\n')) {
-          const parts = line.trim().split(/\s+/);
-          const addr = parts[1] ?? '';
-          const pid = parts[parts.length - 1] ?? '';
-          if (addr.endsWith(`:${port}`) && /^\d+$/.test(pid) && pid !== '0') {
-            await execAsync(`taskkill /PID ${pid} /F`).catch(() => {});
-          }
-        }
-      } catch { /* port not in use */ }
-    }
-  } else {
-    await Promise.all(
-      ports.map((p) => execAsync(`lsof -ti:${p} | xargs kill -9 2>/dev/null`).catch(() => {})),
-    );
-  }
-}
-
 async function listenWithFallback(
   app: ReturnType<typeof Fastify>,
   startPort: number,
-  maxRetries = 5,
+  maxRetries = 20,
 ): Promise<number> {
-  await killPortRange(startPort, maxRetries);
   for (let i = 0; i < maxRetries; i++) {
     const port = startPort + i;
     try {
       await app.listen({ port, host: '127.0.0.1' });
       return port;
     } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'EADDRINUSE' && code !== 'EACCES') throw err;
       if (i === maxRetries - 1) throw err;
     }
   }
-  throw new Error('No available port found');
+  throw new Error(`No available port found in range ${startPort}-${startPort + maxRetries - 1}`);
 }
