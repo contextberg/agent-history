@@ -1,5 +1,7 @@
+import open from 'open';
 import type { KnowledgeConfig, KnowledgeProvider } from '../config.js';
 import { listProfiles, getProfile } from '../knowledge/providers/index.js';
+import type { ProviderProfile } from '../knowledge/providers/index.js';
 import {
   createInterface,
   isInteractiveStdin,
@@ -8,7 +10,54 @@ import {
   prompt,
   promptApiKey,
   promptChoice,
+  promptYesNo,
+  type RL,
 } from './prompts.js';
+import { authMissingHint } from './auth-help.js';
+
+/**
+ * Walk the user through getting credentials when they don't already have them.
+ * Prints the signup URL, offers to open it in the browser, then prompts for
+ * the resulting API key (or detects on-disk OAuth tokens for Codex on retry).
+ */
+async function offerAuthLink(rl: RL, profile: ProviderProfile): Promise<string | undefined> {
+  console.log('');
+  console.log(authMissingHint(profile));
+  console.log('');
+
+  if (profile.signupUrl) {
+    const wantsOpen = await promptYesNo(rl, `Open ${profile.signupUrl} in your browser?`, true);
+    if (wantsOpen) {
+      try {
+        await open(profile.signupUrl);
+        console.log(`  Opened ${profile.signupUrl}`);
+      } catch {
+        console.log(`  Could not auto-open. Visit it manually: ${profile.signupUrl}`);
+      }
+    }
+  }
+
+  // For oauth_disk providers (Codex), don't prompt for a raw key — the user
+  // is supposed to come back after running `codex login`. Re-check the disk.
+  if (profile.authType === 'oauth_disk') {
+    console.log('');
+    console.log('  After signing in via the upstream CLI, press Enter to re-check.');
+    await rl.question('  (Enter to re-check, or type a token to skip the CLI flow): ');
+    const detected = await profile.hooks?.detectAuth?.();
+    if (detected) {
+      console.log(`  Detected ${detected.label}.`);
+      const token = await detected.resolve();
+      return token ?? undefined;
+    }
+    console.log('  No on-disk credential found yet. You can run setup again later.');
+    return undefined;
+  }
+
+  // For api_key providers, prompt for the key.
+  const envHint = profile.envVars[0] ?? 'API key';
+  const raw = await promptApiKey(rl, `Paste your ${envHint} (or press Enter to skip)`);
+  return raw || undefined;
+}
 
 export interface WizardResult {
   provider: KnowledgeProvider;
@@ -83,16 +132,13 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
           const tok = await detected.resolve();
           if (tok) liveAuthToken = tok;
         } else {
-          const envHint = profile.envVars[0] ?? 'API key';
-          const promptText =
-            profile.authType === 'oauth_disk'
-              ? `Enter ${envHint} or run \`codex login\` later (blank to skip)`
-              : `Enter ${envHint} (blank to set later)`;
-          const raw = await promptApiKey(rl, promptText);
-          apiKey = raw || undefined;
-          if (apiKey) liveAuthToken = apiKey;
-          if (profile.signupUrl && !apiKey) {
-            console.log(`  Get one at: ${profile.signupUrl}`);
+          // No env, no on-disk credential — walk the user through signup.
+          const got = await offerAuthLink(rl, profile);
+          if (got) {
+            // For api_key providers we keep the key in config; for oauth_disk
+            // the disk is the source of truth so we don't store it.
+            if (profile.authType === 'api_key') apiKey = got;
+            liveAuthToken = got;
           }
         }
       }
