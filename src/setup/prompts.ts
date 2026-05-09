@@ -52,11 +52,14 @@ export async function prompt(
 }
 
 /**
- * Hidden-input prompt for API keys. Echoes nothing while typing.
+ * Masked-input prompt for API keys. Each typed/pasted character renders as
+ * `*` so the user can SEE that the paste registered (the previous version
+ * echoed nothing, leaving them to wonder whether anything was captured).
+ * Falls back to plain prompt when stdin isn't a TTY (CI / piped input).
  *
- * readline doesn't expose a "no echo" mode, so we monkey-patch the output
- * stream's write() during the question. Falls back to plain prompt if stdin
- * is not a TTY — unattended scripts can pipe the key in without losing it.
+ * After Enter, the caller (gatherAuth) prints a confirmation line with the
+ * captured length and last-4 characters — closing the feedback loop without
+ * exposing the full key.
  */
 export async function promptApiKey(rl: RL, question: string): Promise<string> {
   if (!input.isTTY) {
@@ -65,14 +68,21 @@ export async function promptApiKey(rl: RL, question: string): Promise<string> {
   const stdout = output as NodeJS.WriteStream & { _orig_write?: typeof output.write };
   stdout._orig_write = stdout.write.bind(stdout);
   process.stdout.write(`${question}: `);
-  // Override write to swallow echoed characters.
-  // readline calls output.write with the typed character on each keypress.
+
   let done = false;
   stdout.write = ((chunk: string | Buffer): boolean => {
     if (done) return stdout._orig_write!(chunk);
-    // Allow newlines through so the prompt advances visually.
     const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    // Newline / CR → terminate the visual line as usual.
     if (str.includes('\n') || str.includes('\r')) return stdout._orig_write!('\n');
+    // Backspace / DEL → forward the erase-sequence so the on-screen cursor
+    // backs up over the asterisks the user is deleting.
+    if (str === '\x08' || str === '\x7f' || str === '\b \b') {
+      return stdout._orig_write!('\b \b');
+    }
+    // Replace each printable ASCII char with `*` (paste of length N → N stars).
+    const stars = str.replace(/[\x20-\x7e]/g, '*');
+    if (stars) return stdout._orig_write!(stars);
     return true;
   }) as typeof stdout.write;
 

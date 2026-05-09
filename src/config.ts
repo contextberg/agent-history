@@ -14,7 +14,9 @@ export interface KnowledgeConfig {
   provider: KnowledgeProvider;
   model: string;
   /**
-   * API key (plain text). Each provider's env vars take priority:
+   * Active provider's API key. Kept for backwards compatibility — new code
+   * reads from `apiKeys[provider]` first and falls back to this field.
+   * Each provider's env vars take priority over both:
    *   anthropic  → ANTHROPIC_API_KEY
    *   openai     → OPENAI_API_KEY
    *   google     → GEMINI_API_KEY / GOOGLE_API_KEY
@@ -22,6 +24,13 @@ export interface KnowledgeConfig {
    *   codex      → device-code OAuth via `contextberg setup`
    */
   apiKey?: string;
+  /**
+   * Per-provider API key cache. Lets the user switch the active provider
+   * back and forth in `contextberg setup` without losing previously
+   * entered keys for other providers. The active provider's value is
+   * mirrored into `apiKey` so older readers keep working.
+   */
+  apiKeys?: Partial<Record<KnowledgeProvider, string>>;
   /** Path relative to repo root, or absolute. */
   outputDir: string;
   maxSessionsPerCommit: number;
@@ -81,10 +90,19 @@ export async function loadConfig(): Promise<AgentHistoryConfig> {
   try {
     const raw = await fs.readFile(CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<AgentHistoryConfig>;
+    const knowledge: KnowledgeConfig = {
+      ...CONFIG_DEFAULTS.knowledge,
+      ...parsed.knowledge,
+    };
+    // Back-compat: lift legacy single `apiKey` into the per-provider map so
+    // the wizard sees it the next time the user switches providers and back.
+    if (knowledge.apiKey && !knowledge.apiKeys?.[knowledge.provider]) {
+      knowledge.apiKeys = { ...(knowledge.apiKeys ?? {}), [knowledge.provider]: knowledge.apiKey };
+    }
     return {
       display: { ...CONFIG_DEFAULTS.display, ...parsed.display },
       mcp: { ...CONFIG_DEFAULTS.mcp, ...parsed.mcp },
-      knowledge: { ...CONFIG_DEFAULTS.knowledge, ...parsed.knowledge },
+      knowledge,
     };
   } catch {
     return CONFIG_DEFAULTS;

@@ -52,7 +52,8 @@ async function gatherAuth(rl: RL, profile: ProviderProfile): Promise<AuthOutcome
     const envHint = profile.envVars[0] ?? 'API key';
     const raw = await promptApiKey(rl, `  Paste ${envHint} (or press Enter to skip)`);
     if (raw) {
-      console.log('  Saved.');
+      const tail = raw.slice(-4);
+      console.log(`  ✓ Captured ${raw.length} chars (ends in …${tail})`);
       return { apiKey: raw, liveToken: raw };
     }
     console.log("  Skipped (you can run `contextberg setup` again later).");
@@ -131,7 +132,12 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
       console.log(`  Make sure the server is running at ${profile.baseURL}`);
     } else {
       const envHit = profile.envVars.find((v) => process.env[v]);
-      const storedKey = stayedOnProvider ? current?.apiKey : undefined;
+      // Look up THIS provider's stored key from the per-provider cache.
+      // Falls back to the legacy single `apiKey` field only when we're
+      // staying on the same provider (avoids leaking another provider's
+      // key to a new endpoint).
+      const storedKey = current?.apiKeys?.[providerId]
+        ?? (stayedOnProvider ? current?.apiKey : undefined);
 
       if (envHit) {
         console.log(`\n  ${envHit} is already set in your environment — using it.`);
@@ -140,7 +146,9 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
         // Show last 4 chars so the user can sanity-check WHICH key is stored
         // before deciding to keep or replace it.
         const tail = storedKey.slice(-4);
-        console.log(`\n  A key ending in …${tail} is stored from a previous setup.`);
+        const fromOtherSession = !stayedOnProvider;
+        const where = fromOtherSession ? 'from a previous setup of this provider' : 'from a previous setup';
+        console.log(`\n  A key ending in …${tail} is stored ${where}.`);
         const replace = await promptYesNo(rl, '  Replace it with a new key?', false);
         if (replace) {
           console.log('');

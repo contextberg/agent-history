@@ -14,12 +14,17 @@ export async function runSetup(): Promise<void> {
   // If the user kept the same provider and didn't enter a new key, preserve the
   // stored one. If they switched providers, drop the old key — it's the wrong
   // shape for the new transport.
-  const switchedProvider = config.knowledge.provider !== result.provider;
-  const preservedKey = switchedProvider ? undefined : config.knowledge.apiKey;
-  const finalApiKey = result.apiKey ?? preservedKey;
+  // Per-provider key cache: persist new key for THIS provider, keep other
+  // providers' keys untouched, and mirror the active one into the legacy
+  // `apiKey` field so older readers (and the runtime resolver) keep working.
+  const existingKeys = { ...(config.knowledge.apiKeys ?? {}) };
+  const finalApiKey = result.apiKey ?? existingKeys[result.provider];
+  if (finalApiKey) {
+    existingKeys[result.provider] = finalApiKey;
+  } else {
+    delete existingKeys[result.provider];
+  }
 
-  // Build the next config carefully — exactOptionalPropertyTypes refuses
-  // `apiKey: undefined`, so we conditionally include the field instead.
   const next: AgentHistoryConfig['knowledge'] = {
     ...config.knowledge,
     provider: result.provider,
@@ -29,6 +34,8 @@ export async function runSetup(): Promise<void> {
     maxPromptChars: result.maxPromptChars,
     maxOutputTokens: result.maxOutputTokens,
   };
+  if (Object.keys(existingKeys).length > 0) next.apiKeys = existingKeys;
+  else delete next.apiKeys;
   if (finalApiKey) next.apiKey = finalApiKey;
   else delete next.apiKey;
   config.knowledge = next;
