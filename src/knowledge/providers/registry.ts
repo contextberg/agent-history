@@ -95,6 +95,41 @@ const codexHooks: ProviderHooks = {
 
 // ── Live model fetchers (used by hooks.fetchModels) ────────────────────────
 
+/**
+ * OpenAI's /models endpoint returns the full catalog: embeddings, whisper,
+ * TTS, DALL-E, moderation, instruct-completion legacy models, audio /
+ * realtime variants, etc. The setup wizard only cares about chat-completion
+ * text models, so apply an allowlist + denylist before sorting by relevance.
+ */
+function isOpenAIChatModel(id: string): boolean {
+  const denyPrefix = [
+    'text-embedding-', 'whisper-', 'tts-', 'dall-e-',
+    'davinci', 'babbage', 'omni-', 'text-moderation',
+    'computer-use-', 'codex-mini-',
+  ];
+  if (denyPrefix.some((p) => id.startsWith(p))) return false;
+  if (/-(audio|realtime|tts|search|transcribe|moderation|image|embedding)\b/.test(id)) return false;
+  if (/-instruct(\b|-)/.test(id)) return false;
+  // Allow conventional chat / reasoning model families.
+  return /^(gpt-\d|o\d|chatgpt-)/.test(id);
+}
+
+/** Rank chat models so the most useful (newest flagship first) bubble up. */
+function rankOpenAIChatModel(id: string): number {
+  if (id.startsWith('gpt-5')) return 0;
+  if (id.startsWith('o4')) return 5;
+  if (id === 'gpt-4o') return 10;
+  if (id.startsWith('gpt-4o-mini')) return 15;
+  if (id.startsWith('gpt-4o')) return 20;
+  if (id.startsWith('o3')) return 25;
+  if (id.startsWith('o1')) return 30;
+  if (id.startsWith('gpt-4-turbo')) return 40;
+  if (id.startsWith('gpt-4')) return 50;
+  if (id.startsWith('chatgpt-')) return 60;
+  if (id.startsWith('gpt-3.5')) return 70;
+  return 100;
+}
+
 async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Promise<string[] | null> {
   if (!auth) return null;
   try {
@@ -103,7 +138,10 @@ async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Pr
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { data?: Array<{ id?: string }> };
-    return (data.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
+    return (data.data ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => typeof id === 'string' && isOpenAIChatModel(id))
+      .sort((a, b) => rankOpenAIChatModel(a) - rankOpenAIChatModel(b) || a.localeCompare(b));
   } catch {
     return null;
   }
