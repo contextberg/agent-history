@@ -42,8 +42,7 @@ export interface StoreResult {
 
 interface DateParts {
   month: string;   // "2026-05"
-  day: string;     // "09"
-  time: string;    // "20-11"
+  day: string;     // "10"
 }
 
 /** Use the commit's authored time when available — it's what the user thinks
@@ -53,9 +52,7 @@ function dateParts(authoredAt: string, extractedAt: string): DateParts {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
-  const HH = String(date.getHours()).padStart(2, '0');
-  const MM = String(date.getMinutes()).padStart(2, '0');
-  return { month: `${yyyy}-${mm}`, day: dd, time: `${HH}-${MM}` };
+  return { month: `${yyyy}-${mm}`, day: dd };
 }
 
 /**
@@ -183,28 +180,55 @@ async function appendIfNew(
 }
 
 /**
- * Persist a per-commit knowledge entry. Writes the MD + JSON pair under
- * `<localDir>/commits/YYYY-MM/{sha7}-{slug}.{md,json}` for the local repo
- * and the same shape under `~/.agent-history/knowledge/<repoName>/commits/`
- * for cross-repo MCP queries. Also appends one line to CHANGELOG.md
- * (deduplicated by sha marker).
+ * Resolve the basename for this commit's md/json, disambiguating against
+ * existing files in the same day-folder.
  *
- * Files are written FRESH (overwritten) per run — re-running learn for the
- * same commit replaces both the MD and JSON. CHANGELOG is append-only.
+ *   - No file at `{slug}.md` exists → use `{slug}`
+ *   - File exists AND its frontmatter sha matches this entry → reuse `{slug}`
+ *     (re-running learn for the same commit overwrites idempotently)
+ *   - File exists for a DIFFERENT sha → append a 4-char sha suffix so the
+ *     new commit doesn't clobber the old note
+ */
+async function resolveBaseName(dayDir: string, slug: string, sha: string): Promise<string> {
+  const candidate = path.join(dayDir, `${slug}.md`);
+  try {
+    const existing = await fs.readFile(candidate, 'utf-8');
+    if (existing.includes(`sha: ${sha}`)) return slug;
+    return `${slug}-${sha.slice(0, 4)}`;
+  } catch {
+    return slug;
+  }
+}
+
+/**
+ * Persist a per-commit knowledge entry. Layout (both local and global mirror):
+ *
+ *   <root>/
+ *     CHANGELOG.md                               ← timeline, one line per commit
+ *     YYYY-MM/
+ *       DD/
+ *         {slug}.md                              ← human-readable
+ *         .data/
+ *           {slug}.json                          ← machine-readable sidecar
+ *
+ * The day folder already provides the time scope, so the filename is just
+ * the slug — no HH-MM noise. Same-day collisions for a *different* commit
+ * get a 4-char sha suffix; same-commit re-runs overwrite (idempotent).
+ * The .data/ subdir hides the JSON from default `ls` output.
  */
 export async function storeKnowledge(
   entry: KnowledgeEntry,
   options: { localDir: string | null },
 ): Promise<StoreResult> {
-  const { month, day, time } = dateParts(entry.authoredAt, entry.extractedAt);
+  const { month, day } = dateParts(entry.authoredAt, entry.extractedAt);
   const slug = slugFromSubject(entry.subject);
-  const baseName = `${time}-${slug}`;
 
   const md = renderMarkdown(entry);
   const json = JSON.stringify(entry, null, 2) + '\n';
 
   const writeBundle = async (root: string): Promise<{ md: string; json: string; changelog: string }> => {
     const dayDir = path.join(root, month, day);
+    const baseName = await resolveBaseName(dayDir, slug, entry.sha);
     const mdPath = path.join(dayDir, `${baseName}.md`);
     const jsonPath = path.join(dayDir, '.data', `${baseName}.json`);
     await writeFileFresh(mdPath, md);

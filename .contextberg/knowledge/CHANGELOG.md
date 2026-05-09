@@ -1,1 +1,1 @@
-- 2026-05-09 `dba4ffd` fix(setup): allow replacing a stored API key / re-running OAuth sign-in  ([detail](2026-05/10/05-08-fix-setup-allow-replacing.md))
+- 2026-05-09 `388bc8f` fix(store): cleaner on-disk layout — day folders, HH-MM names, hidden .data/  ([detail](2026-05/10/fix-store-cleaner-on-disk-layout.md))
