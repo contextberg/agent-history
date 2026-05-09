@@ -240,6 +240,44 @@ const m = (
 // ── Profiles ───────────────────────────────────────────────────────────────
 
 const PROFILES: Record<ProviderId, ProviderProfile> = {
+  codex: {
+    id: 'codex',
+    name: 'codex',
+    aliases: ['openai-codex', 'chatgpt'],
+    displayName: 'Codex (ChatGPT subscription)',
+    description: 'OpenAI Codex via ~/.codex/auth.json OAuth',
+    signupUrl: 'https://chatgpt.com/codex',
+    transport: 'openai_responses',
+    authType: 'oauth_disk',
+    envVars: ['CODEX_API_KEY'],
+    baseURL: CODEX_BASE_URL,
+    fallbackModels: [
+      // Codex slugs drift fast — keep this short and rely on live fetch.
+      m('gpt-5-codex', 200_000, 16_384, 'max_output_tokens', 'reasoning', true),
+      m('gpt-5', 200_000, 16_384, 'max_output_tokens', 'reasoning'),
+    ],
+    hooks: { ...codexHooks, fetchModels: (auth) => fetchCodexModels(auth) },
+  },
+
+  google: {
+    id: 'google',
+    name: 'google',
+    aliases: ['gemini', 'google-ai-studio'],
+    displayName: 'Google (Gemini API key)',
+    description: 'Gemini via the OpenAI-compatible endpoint',
+    signupUrl: 'https://aistudio.google.com/apikey',
+    transport: 'openai_chat',
+    authType: 'api_key',
+    envVars: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    fallbackModels: [
+      m('gemini-2.5-pro', 2_000_000, 8192, 'max_tokens', 'chat', true),
+      m('gemini-2.5-flash', 1_000_000, 8192, 'max_tokens', 'chat'),
+      m('gemini-2.5-flash-lite', 1_000_000, 8192, 'max_tokens', 'chat'),
+    ],
+    hooks: { fetchModels: (auth) => fetchGeminiModels(auth) },
+  },
+
   anthropic: {
     id: 'anthropic',
     name: 'anthropic',
@@ -274,25 +312,6 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
     hooks: { fetchModels: (auth) => fetchOpenAIModels(auth) },
   },
 
-  google: {
-    id: 'google',
-    name: 'google',
-    aliases: ['gemini', 'google-ai-studio'],
-    displayName: 'Google (Gemini API key)',
-    description: 'Gemini via the OpenAI-compatible endpoint',
-    signupUrl: 'https://aistudio.google.com/apikey',
-    transport: 'openai_chat',
-    authType: 'api_key',
-    envVars: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
-    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-    fallbackModels: [
-      m('gemini-2.5-pro', 2_000_000, 8192, 'max_tokens', 'chat', true),
-      m('gemini-2.5-flash', 1_000_000, 8192, 'max_tokens', 'chat'),
-      m('gemini-2.5-flash-lite', 1_000_000, 8192, 'max_tokens', 'chat'),
-    ],
-    hooks: { fetchModels: (auth) => fetchGeminiModels(auth) },
-  },
-
   openrouter: {
     id: 'openrouter',
     name: 'openrouter',
@@ -314,33 +333,13 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
     hooks: { fetchModels: () => fetchOpenRouterModels() },
   },
 
-  codex: {
-    id: 'codex',
-    name: 'codex',
-    aliases: ['openai-codex', 'chatgpt'],
-    displayName: 'Codex (ChatGPT subscription)',
-    description: 'OpenAI Codex via ~/.codex/auth.json OAuth',
-    signupUrl: 'https://chatgpt.com/codex',
-    transport: 'openai_responses',
-    authType: 'oauth_disk',
-    envVars: ['CODEX_API_KEY'],
-    baseURL: CODEX_BASE_URL,
-    fallbackModels: [
-      // Codex slugs drift fast — keep this short and rely on live fetch.
-      m('gpt-5-codex', 200_000, 16_384, 'max_output_tokens', 'reasoning', true),
-      m('gpt-5', 200_000, 16_384, 'max_output_tokens', 'reasoning'),
-    ],
-    hooks: { ...codexHooks, fetchModels: (auth) => fetchCodexModels(auth) },
-  },
-
   // OpenCode Go — $10/mo subscription that fronts a basket of "open" models
   // (GLM, Kimi, MiMo, Qwen, MiniMax). Reference: hermes_cli/auth.py,
   // hermes_cli/models.py, plugins/model-providers/opencode-zen/__init__.py.
-  // Note: Hermes routes MiniMax-on-this-endpoint through Anthropic Messages
-  // because the upstream serves them under /v1/messages — we skip that
-  // nuance and stick to chat_completions, which covers GLM/Kimi/MiMo/Qwen.
-  // MiniMax models still appear in fallback list but will only work if /v1
-  // accepts them via chat completions on this account.
+  // Note: MiniMax models on this endpoint use Anthropic Messages format
+  // (served at /v1/messages by the upstream); we use chat_completions which
+  // covers GLM / Kimi / MiMo / Qwen. MiniMax entries appear in the fallback
+  // list but require an upstream that exposes them via /chat/completions.
   'opencode-go': {
     id: 'opencode-go',
     name: 'opencode-go',
