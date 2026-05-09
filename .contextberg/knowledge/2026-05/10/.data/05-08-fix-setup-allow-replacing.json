@@ -1,0 +1,26 @@
+{
+  "sha": "dba4ffdebae260ee6d0405b422366d193284b5ce",
+  "subject": "fix(setup): allow replacing a stored API key / re-running OAuth sign-in",
+  "repo": "C:\\Users\\mochi\\trackq-dev\\agent-history",
+  "repoName": "agent-history",
+  "branch": "claude/npm-knowledge-setup-cUBlZ",
+  "authorName": "taiks12",
+  "authoredAt": "2026-05-10T05:08:11+09:00",
+  "extractedAt": "2026-05-09T20:24:15.110Z",
+  "model": "google/gemini-3.1-flash-lite",
+  "provider": "openrouter",
+  "body": "## What was done\n- Refactored `src/setup/wizard.ts` to allow users to overwrite existing credentials during the interactive setup flow.\n- Added a \"Replace?\" prompt for `api_key` providers after displaying the last 4 characters of the stored key.\n- Added a \"Re-run sign-in?\" prompt for `oauth_disk` providers (specifically Codex) when an interactive auth hook is available, enabling users to refresh expired sessions without manual file deletion.\n\n## Where it got stuck\n- Hit a flow ambiguity: When the user chooses to \"Replace\" an OAuth token, the logic initially fell back to the standard `detected.resolve()` if the `interactiveAuth()` hook failed or returned empty; ensuring this fallback didn't silently re-use the *old* bad token required explicit handling of the error state.\n- Deciding on UX: Initially considered auto-detecting expiration via status codes, but opted for an explicit manual trigger (\"Re-run sign-in?\") to avoid unnecessary network calls and simplify the wizard's dependency on provider-specific state.",
+  "sessions": [
+    {
+      "id": "3745c988-77e8-47be-af16-97eab786a6d1",
+      "score": 0.95,
+      "reason": "repo match · committed during session · 100% file overlap"
+    }
+  ],
+  "filesChanged": [
+    "C:\\Users\\mochi\\trackq-dev\\agent-history\\src\\setup\\wizard.ts"
+  ],
+  "inputChars": 18001,
+  "outputChars": 1025,
+  "durationMs": 1993
+}

@@ -40,18 +40,63 @@ export interface StoreResult {
   changelogPath: string | null;
 }
 
-function monthKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+interface DateParts {
+  month: string;   // "2026-05"
+  day: string;     // "09"
+  time: string;    // "20-11"
 }
 
-/** Repo-friendly slug from a commit subject. */
+/** Use the commit's authored time when available — it's what the user thinks
+ *  in terms of ("the bug I fixed yesterday"). Falls back to extraction time. */
+function dateParts(authoredAt: string, extractedAt: string): DateParts {
+  const date = new Date(authoredAt || extractedAt);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const HH = String(date.getHours()).padStart(2, '0');
+  const MM = String(date.getMinutes()).padStart(2, '0');
+  return { month: `${yyyy}-${mm}`, day: dd, time: `${HH}-${MM}` };
+}
+
+/**
+ * Short, scannable slug from a commit subject.
+ *
+ * Strategy:
+ *   1. Slugify (lowercase, dashes for non-word chars).
+ *   2. Greedy-take whole tokens until the total would exceed MAX chars.
+ *   3. Drop trailing single-char / two-char "fluff" tokens (a, to, of, an, in)
+ *      so we end on a real word.
+ *
+ * Without step 3, "fix(setup): allow replacing a stored API key" truncates
+ * to "fix-setup-allow-replacing-a", which reads worse than dropping the "a".
+ */
 function slugFromSubject(subject: string): string {
-  const cleaned = subject
+  const slug = subject
     .toLowerCase()
     .replace(/[`*_~]/g, '')
     .replace(/[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]+/g, '-')
     .replace(/^-+|-+$/g, '');
-  return cleaned.slice(0, 50) || 'commit';
+  if (!slug) return 'commit';
+  const MAX = 32;
+  if (slug.length <= MAX) return slug;
+
+  const tokens = slug.split('-');
+  let acc = '';
+  for (const tok of tokens) {
+    const next = acc ? `${acc}-${tok}` : tok;
+    if (next.length > MAX) break;
+    acc = next;
+  }
+  if (!acc) acc = tokens[0]!.slice(0, MAX);  // first token alone exceeds MAX
+
+  // Trim trailing low-info short tokens.
+  while (acc.includes('-')) {
+    const lastDash = acc.lastIndexOf('-');
+    const tail = acc.slice(lastDash + 1);
+    if (tail.length < 3) acc = acc.slice(0, lastDash);
+    else break;
+  }
+  return acc || 'commit';
 }
 
 function quoteYaml(value: string): string {
@@ -151,48 +196,51 @@ export async function storeKnowledge(
   entry: KnowledgeEntry,
   options: { localDir: string | null },
 ): Promise<StoreResult> {
-  const month = monthKey(new Date(entry.extractedAt));
+  const { month, day, time } = dateParts(entry.authoredAt, entry.extractedAt);
   const slug = slugFromSubject(entry.subject);
-  const sha7 = entry.sha.slice(0, 7);
-  const baseName = `${sha7}-${slug}`;
+  const baseName = `${time}-${slug}`;
 
   const md = renderMarkdown(entry);
   const json = JSON.stringify(entry, null, 2) + '\n';
 
+  const writeBundle = async (root: string): Promise<{ md: string; json: string; changelog: string }> => {
+    const dayDir = path.join(root, month, day);
+    const mdPath = path.join(dayDir, `${baseName}.md`);
+    const jsonPath = path.join(dayDir, '.data', `${baseName}.json`);
+    await writeFileFresh(mdPath, md);
+    await writeFileFresh(jsonPath, json);
+    const changelogPath = path.join(root, 'CHANGELOG.md');
+    const rel = path.posix.join(month, day, `${baseName}.md`);
+    await appendIfNew(
+      changelogPath,
+      `\`${entry.sha.slice(0, 7)}\``,
+      renderChangelogEntry(entry, rel),
+    );
+    return { md: mdPath, json: jsonPath, changelog: changelogPath };
+  };
+
   // Global mirror (cross-repo MCP source).
   const globalRoot = path.join(CONFIG_DIR, 'knowledge', entry.repoName);
-  const globalMdPath = path.join(globalRoot, 'commits', month, `${baseName}.md`);
-  const globalJsonPath = path.join(globalRoot, 'commits', month, `${baseName}.json`);
-  await writeFileFresh(globalMdPath, md);
-  await writeFileFresh(globalJsonPath, json);
-  const globalChangelogPath = path.join(globalRoot, 'CHANGELOG.md');
-  const globalRel = path.posix.join('commits', month, `${baseName}.md`);
-  await appendIfNew(
-    globalChangelogPath,
-    `\`${entry.sha.slice(0, 7)}\``,
-    renderChangelogEntry(entry, globalRel),
-  );
+  const globalBundle = await writeBundle(globalRoot);
 
   // Local mirror (lives next to the repo, gets committed by the user).
   let localMdPath: string | null = null;
   let localJsonPath: string | null = null;
   let changelogPath: string | null = null;
-
   if (options.localDir) {
-    localMdPath = path.join(options.localDir, 'commits', month, `${baseName}.md`);
-    localJsonPath = path.join(options.localDir, 'commits', month, `${baseName}.json`);
-    await writeFileFresh(localMdPath, md);
-    await writeFileFresh(localJsonPath, json);
-    changelogPath = path.join(options.localDir, 'CHANGELOG.md');
-    const localRel = path.posix.join('commits', month, `${baseName}.md`);
-    await appendIfNew(
-      changelogPath,
-      `\`${entry.sha.slice(0, 7)}\``,
-      renderChangelogEntry(entry, localRel),
-    );
+    const localBundle = await writeBundle(options.localDir);
+    localMdPath = localBundle.md;
+    localJsonPath = localBundle.json;
+    changelogPath = localBundle.changelog;
   }
 
-  return { localMdPath, localJsonPath, globalMdPath, globalJsonPath, changelogPath };
+  return {
+    localMdPath,
+    localJsonPath,
+    globalMdPath: globalBundle.md,
+    globalJsonPath: globalBundle.json,
+    changelogPath,
+  };
 }
 
 export function globalKnowledgeDir(): string {
