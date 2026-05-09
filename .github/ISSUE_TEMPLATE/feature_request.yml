@@ -1,0 +1,75 @@
+name: "✨ Feature Request"
+description: Suggest a new feature, agent reader, knowledge provider, or improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Two common cases worth flagging:
+
+        - **Adding a new agent reader** (Claude Code / Cursor / Codex / etc.) — the `IReader` interface is small;
+          contributions are very welcome. See the README → Contributing section.
+        - **Adding a new knowledge provider** — most providers are a single `ProviderProfile` entry in
+          `src/knowledge/providers/registry.ts`. If the upstream is OpenAI-compatible, no transport code is
+          needed. Cloudflare-bypass / SSE / OAuth quirks live in `ProviderHooks`.
+
+        Search [existing issues](https://github.com/contextberg/agent-history/issues) before opening.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What are you trying to do that isn't possible today?
+      placeholder: |
+        I want to pull commit summaries from a different provider that contextberg doesn't support.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Be specific. CLI flag? Config key? New file?
+      placeholder: |
+        Add a `--provider` flag to `contextberg test` so I can test multiple providers without re-running setup.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Feature Type
+      options:
+        - New agent reader
+        - New knowledge provider
+        - CLI improvement (setup / learn / test / status)
+        - MCP tool / output shape
+        - Web UI improvement
+        - Configuration option
+        - Performance / reliability
+        - Developer experience (tests, docs, CI)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Estimated Scope
+      options:
+        - Small (single file, < 100 lines)
+        - Medium (a few files, < 500 lines)
+        - Large (new module / significant refactor)
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+
+  - type: checkboxes
+    id: pr-ready
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to implement this myself and submit a PR.
