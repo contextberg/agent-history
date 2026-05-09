@@ -9,6 +9,7 @@ import type { AgentSource, ReaderOptions } from '../readers/index.js';
 import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
 import { aggregateCommits } from './commits.js';
+import { readAllLinkCaches } from '../knowledge/link-cache.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.join(__dirname, 'web');
@@ -53,6 +54,22 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
   });
 
   app.get('/api/commits', async () => {
+    // Prefer pre-computed link cache (populated by `contextberg learn` on commit).
+    // For repos not yet in the cache, fall back to live computation.
+    const caches = await readAllLinkCaches();
+
+    if (caches.length > 0) {
+      const cachedRepos = new Set(caches.map((c) => c.repo));
+      const sessions = await service.getSessions({ maxSessions: 200 });
+      const liveCommits = await aggregateCommits(
+        sessions.filter((s) => !s.cwd || !cachedRepos.has(s.cwd)),
+      );
+      const cachedCommits = caches.flatMap((c) => c.commits);
+      const all = [...cachedCommits, ...liveCommits];
+      all.sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+      return { commits: all };
+    }
+
     const sessions = await service.getSessions({ maxSessions: 200 });
     return { commits: await aggregateCommits(sessions) };
   });
@@ -67,6 +84,7 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     const updated: AgentHistoryConfig = {
       display: { ...current.display, ...body.display },
       mcp: { ...current.mcp, ...body.mcp },
+      knowledge: { ...current.knowledge, ...body.knowledge },
     };
     await saveConfig(updated);
     return updated;

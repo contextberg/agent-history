@@ -4,3 +4,5 @@ dist
 *.local
 .claude/to-do/
 .playwright-mcp
+reference/
+.contextberg/
