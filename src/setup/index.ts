@@ -1,6 +1,8 @@
 import { loadConfig, saveConfig } from '../config.js';
+import type { AgentHistoryConfig } from '../config.js';
 import { runWizard } from './wizard.js';
 import { installHook, getHookStatus, uninstallHook } from './hooks.js';
+import { getOverlay, resolveAuth } from '../knowledge/providers/index.js';
 
 export async function runSetup(): Promise<void> {
   console.log('contextberg setup\n');
@@ -37,25 +39,22 @@ export async function runSetup(): Promise<void> {
 }
 
 export async function runStatus(): Promise<void> {
-  const config = await loadConfig();
+  const config: AgentHistoryConfig = await loadConfig();
   const k = config.knowledge;
+  const overlay = getOverlay(k.provider);
+  const auth = await resolveAuth(overlay, k.apiKey);
   const status = await getHookStatus();
 
   console.log('contextberg status\n');
-  console.log(`  Provider : ${k.provider}`);
+  console.log(`  Provider : ${overlay.displayName} (${k.provider})`);
   console.log(`  Model    : ${k.model}`);
   console.log(`  Output   : ${k.outputDir}`);
   console.log(`  Max sess : ${k.maxSessionsPerCommit}`);
-  console.log(`  API key  : ${resolveApiKey(config) ? 'set' : 'not set'}`);
+  console.log(`  Auth     : ${auth ? `set (${overlay.apiKeyEnv} or stored)` : 'NOT set'}`);
   console.log(`  Hook     : ${status.installed ? `installed (${status.repoRoot})` : 'not installed'}`);
 }
 
 export async function runUninstall(): Promise<void> {
   await uninstallHook();
   console.log('post-commit hook removed.');
-}
-
-function resolveApiKey(config: ReturnType<typeof loadConfig> extends Promise<infer T> ? T : never): string | undefined {
-  const envVar = config.knowledge.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  return process.env[envVar] ?? config.knowledge.apiKey;
 }

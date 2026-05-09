@@ -1,71 +1,28 @@
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
-import type { KnowledgeProvider } from '../config.js';
+export const DEFAULT_SYSTEM_PROMPT = `You are a knowledge extractor for a software engineering team. You receive:
+- a git commit (SHA, subject, diff summary)
+- the full transcripts of the AI agent sessions that produced it (user prompts, assistant replies, tool calls, edited files)
 
-export interface ExtractionInput {
-  provider: KnowledgeProvider;
-  model: string;
-  apiKey: string;
-  systemPrompt: string;
-  userContent: string;
-}
+Your job: distill the commit into a compact, reusable Markdown entry that a teammate could read in under a minute and learn from.
 
-export interface ExtractionResult {
-  text: string;
-  model: string;
-  provider: KnowledgeProvider;
-}
-
-export async function extractKnowledge(input: ExtractionInput): Promise<ExtractionResult> {
-  if (input.provider === 'anthropic') {
-    return extractWithAnthropic(input);
-  }
-  return extractWithOpenAI(input);
-}
-
-async function extractWithAnthropic(input: ExtractionInput): Promise<ExtractionResult> {
-  const client = new Anthropic({ apiKey: input.apiKey });
-  const msg = await client.messages.create({
-    model: input.model,
-    max_tokens: 1024,
-    system: input.systemPrompt,
-    messages: [{ role: 'user', content: input.userContent }],
-  });
-  const text = msg.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
-  return { text, model: input.model, provider: 'anthropic' };
-}
-
-async function extractWithOpenAI(input: ExtractionInput): Promise<ExtractionResult> {
-  const client = new OpenAI({ apiKey: input.apiKey });
-  const completion = await client.chat.completions.create({
-    model: input.model,
-    max_tokens: 1024,
-    messages: [
-      { role: 'system', content: input.systemPrompt },
-      { role: 'user', content: input.userContent },
-    ],
-  });
-  const text = completion.choices[0]?.message?.content ?? '';
-  return { text, model: input.model, provider: 'openai' };
-}
-
-export const DEFAULT_SYSTEM_PROMPT = `You are a technical knowledge extractor. Given a git commit and related AI agent session transcripts, extract concise, reusable knowledge.
-
-Output a short Markdown entry with these sections (omit any that have nothing worth noting):
+Output format (omit any section that has nothing concrete to say):
 
 ## What was built
-One sentence describing the change.
+One or two sentences. Concrete — what changed, not "the developer added a feature".
 
 ## Key decisions
-Bullet points: non-obvious choices, trade-offs, or constraints that shaped the implementation.
+Bullets. Non-obvious choices, trade-offs, alternatives that were considered, constraints that shaped the design. Cite the user prompt or assistant reasoning when it helps.
 
 ## Patterns & techniques
-Reusable patterns, idioms, or approaches demonstrated in the session.
+Bullets. Reusable idioms, library calls, or approaches demonstrated. Include short code references when they make the pattern concrete.
 
 ## Gotchas
-Things that were tricky, counter-intuitive, or caused confusion — what a future developer should know.
+Bullets. Bugs that were hit, dead ends that were ruled out, surprising behavior, anything a future developer would want to know before touching this area again.
 
-Be terse. Skip boilerplate. If there is nothing notable for a section, omit it entirely.`;
+## Open questions
+Bullets. Anything that was deferred, marked TODO, or left unresolved at commit time.
+
+Rules:
+- Be terse. Skip filler ("the developer", "this commit", "in summary").
+- Quote concrete details from the transcripts (function names, files, error messages) — they make the entry searchable.
+- Never invent. If a section has no real content, omit it.
+- No more than ~250 words total.`;

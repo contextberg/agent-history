@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-export type KnowledgeProvider = 'anthropic' | 'openai';
+export type KnowledgeProvider = 'anthropic' | 'openai' | 'google' | 'codex';
 
 export interface KnowledgeConfig {
   enabled: boolean;
@@ -12,6 +12,8 @@ export interface KnowledgeConfig {
    * API key (plain text). Corresponding env var takes priority:
    *   anthropic → ANTHROPIC_API_KEY
    *   openai    → OPENAI_API_KEY
+   *   google    → GEMINI_API_KEY
+   *   codex     → CODEX_API_KEY (or ~/.codex/auth.json OAuth)
    */
   apiKey?: string;
   /** Path relative to repo root, or absolute. */
@@ -19,6 +21,10 @@ export interface KnowledgeConfig {
   maxSessionsPerCommit: number;
   /** Custom system prompt for knowledge extraction. */
   prompt?: string;
+  /** Hard cap on the prompt content sent to the provider. */
+  maxPromptChars?: number;
+  /** Max output tokens. */
+  maxOutputTokens?: number;
 }
 
 export interface AgentHistoryConfig {
@@ -54,6 +60,8 @@ export const CONFIG_DEFAULTS: AgentHistoryConfig = {
     model: 'claude-sonnet-4-6',
     outputDir: '.contextberg/knowledge',
     maxSessionsPerCommit: 3,
+    maxPromptChars: 18000,
+    maxOutputTokens: 2048,
   },
 };
 

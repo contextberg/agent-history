@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import type { KnowledgeProvider } from '../config.js';
+import { listProviders, getOverlay } from '../knowledge/providers/index.js';
 
 export interface WizardResult {
   provider: KnowledgeProvider;
@@ -9,25 +10,6 @@ export interface WizardResult {
   outputDir: string;
   maxSessionsPerCommit: number;
 }
-
-const PROVIDER_MODELS: Record<KnowledgeProvider, string[]> = {
-  anthropic: [
-    'claude-sonnet-4-6',
-    'claude-opus-4-7',
-    'claude-haiku-4-5-20251001',
-  ],
-  openai: [
-    'gpt-4o',
-    'gpt-4o-mini',
-    'o3',
-    'o4-mini',
-  ],
-};
-
-const API_KEY_ENV: Record<KnowledgeProvider, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-};
 
 function printMenu(items: string[]): void {
   items.forEach((item, i) => console.log(`  ${i + 1}) ${item}`));
@@ -53,23 +35,31 @@ export async function runWizard(): Promise<WizardResult> {
   const rl = readline.createInterface({ input, output });
   try {
     console.log('\nSelect provider:');
-    const providers: KnowledgeProvider[] = ['anthropic', 'openai'];
-    const pi = await pickFromList(rl, 'Provider', providers);
-    const provider = providers[pi]!;
+    const overlays = listProviders();
+    const labels = overlays.map((o) => `${o.displayName}  [${o.apiKeyEnv}]`);
+    const pi = await pickFromList(rl, 'Provider', labels);
+    const overlay = overlays[pi]!;
+    const provider = overlay.id;
 
-    const models = PROVIDER_MODELS[provider];
     console.log('\nSelect model:');
-    const mi = await pickFromList(rl, 'Model', models);
-    const model = models[mi]!;
+    const mi = await pickFromList(rl, 'Model', overlay.models);
+    const model = overlay.models[mi]!;
 
-    const envVar = API_KEY_ENV[provider];
-    const envVal = process.env[envVar];
     let apiKey: string | undefined;
+    const envVal = process.env[overlay.apiKeyEnv];
 
     if (envVal) {
-      console.log(`\n  ${envVar} is already set — using it.`);
+      console.log(`\n  ${overlay.apiKeyEnv} is already set — using it.`);
+    } else if (overlay.id === 'codex') {
+      const stored = overlay.resolveTokenFromDisk ? await overlay.resolveTokenFromDisk() : null;
+      if (stored) {
+        console.log('\n  Codex CLI auth detected at ~/.codex/auth.json — using it.');
+      } else {
+        const raw = await rl.question(`\nEnter ${overlay.apiKeyEnv} or run \`codex login\` later (blank to skip): `);
+        apiKey = raw.trim() || undefined;
+      }
     } else {
-      const raw = await rl.question(`\nEnter ${envVar} (leave blank to set later): `);
+      const raw = await rl.question(`\nEnter ${overlay.apiKeyEnv} (leave blank to set later): `);
       apiKey = raw.trim() || undefined;
     }
 
@@ -77,6 +67,12 @@ export async function runWizard(): Promise<WizardResult> {
 
     const maxRaw = await ask(rl, 'Max sessions per commit', '3');
     const maxSessionsPerCommit = Math.max(1, parseInt(maxRaw, 10) || 3);
+
+    // Side-effect-free check just so we can warn the user up front.
+    const overlayCheck = getOverlay(provider);
+    if (overlayCheck.transport === 'openai_responses') {
+      console.log('\n  Note: Codex requires the Responses API; ensure your subscription supports it.');
+    }
 
     return { provider, model, apiKey, outputDir, maxSessionsPerCommit };
   } finally {

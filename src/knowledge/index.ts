@@ -4,9 +4,12 @@ import { promisify } from 'node:util';
 import { loadConfig } from '../config.js';
 import { AgentHistoryService } from '../readers/index.js';
 import { aggregateCommits } from '../server/commits.js';
-import { extractKnowledge, DEFAULT_SYSTEM_PROMPT } from './extractor.js';
+import type { AgentSession } from '../readers/types.js';
+import { DEFAULT_SYSTEM_PROMPT } from './extractor.js';
 import { storeKnowledge } from './store.js';
 import { writeLinkCache } from './link-cache.js';
+import { buildPrompt } from './transcripts.js';
+import { callProvider, getOverlay, resolveAuth } from './providers/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,11 +25,6 @@ function log(msg: string, verbose: boolean): void {
   if (verbose) console.error(`[contextberg] ${msg}`);
 }
 
-function resolveApiKey(provider: string, configKey?: string): string | undefined {
-  const envVar = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  return process.env[envVar] ?? configKey;
-}
-
 async function resolveCommitSha(repo: string, ref: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', repo, 'rev-parse', ref]);
   return stdout.trim();
@@ -37,32 +35,22 @@ async function getCommitSubject(repo: string, sha: string): Promise<string> {
   return stdout.trim();
 }
 
-function buildUserContent(
-  sha: string,
-  subject: string,
-  repo: string,
-  sessions: Awaited<ReturnType<typeof aggregateCommits>>[number]['links'],
-): string {
-  const MAX_CHARS = 3000;
-  const parts: string[] = [
-    `## Commit`,
-    `SHA: ${sha}`,
-    `Subject: ${subject}`,
-    `Repo: ${path.basename(repo)}`,
-    ``,
-    `## Agent sessions`,
-  ];
-
-  for (const link of sessions) {
-    parts.push(`### Session ${link.session.id.slice(0, 8)} (${link.session.source}, score ${link.score.toFixed(2)})`);
-    // session snippet only — full transcripts not available via CommitWithLinks
-    parts.push(`Project: ${link.session.project}`);
-    if (link.session.gitBranch) parts.push(`Branch: ${link.session.gitBranch}`);
-    parts.push('');
+/**
+ * Compact diff: file headers + first ~80 lines per hunk. Full diffs blow up
+ * the prompt budget without adding much signal beyond what the touched-files
+ * list already conveys.
+ */
+async function getCommitDiff(repo: string, sha: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repo, 'show', '--stat', '--patch', '--no-color', '-M', sha],
+      { maxBuffer: 8 * 1024 * 1024 },
+    );
+    return stdout;
+  } catch {
+    return '';
   }
-
-  const joined = parts.join('\n');
-  return joined.length > MAX_CHARS ? joined.slice(0, MAX_CHARS) + '\n[truncated]' : joined;
 }
 
 export async function runLearn(opts: LearnOptions = {}): Promise<void> {
@@ -78,10 +66,14 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     return;
   }
 
-  const apiKey = resolveApiKey(k.provider, k.apiKey);
-  if (!apiKey) {
-    const envVar = k.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-    console.error(`[contextberg] No API key found. Set ${envVar} or run \`contextberg setup\`.`);
+  const overlay = getOverlay(k.provider);
+  const auth = await resolveAuth(overlay, k.apiKey);
+  if (!auth) {
+    console.error(
+      `[contextberg] No credentials for ${overlay.displayName}. Set ${overlay.apiKeyEnv}` +
+        (overlay.resolveTokenFromDisk ? ' or run `codex login`' : '') +
+        ', or run `contextberg setup`.',
+    );
     process.exit(1);
   }
 
@@ -94,7 +86,6 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   }
 
   log(`Processing commit ${sha.slice(0, 8)} in ${repo}`, verbose);
-
   const subject = await getCommitSubject(repo, sha).catch(() => sha.slice(0, 8));
 
   const service = new AgentHistoryService();
@@ -102,31 +93,60 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   log(`Loaded ${sessions.length} sessions`, verbose);
 
   const commitLinks = await aggregateCommits(sessions);
-
-  // Persist the computed links for this repo so the web UI can serve them
-  // from cache instead of recomputing on every page load.
   const repoLinks = commitLinks.filter((c) => c.repo === repo);
   await writeLinkCache(repo, repoLinks).catch(() => undefined);
 
   const match = commitLinks.find((c) => c.sha === sha && c.repo === repo);
-
   if (!match || match.links.length === 0) {
     log(`No sessions linked to commit ${sha.slice(0, 8)} — nothing to extract.`, verbose);
     return;
   }
 
+  const sessionById = new Map<string, AgentSession>();
+  for (const s of sessions) sessionById.set(s.id, s);
+
   const topLinks = match.links.slice(0, k.maxSessionsPerCommit);
-  log(`Found ${topLinks.length} linked session(s)`, verbose);
+  const fullSessions = topLinks
+    .map((link) => {
+      const full = sessionById.get(link.session.id);
+      return full ? { session: full, score: link.score, reason: link.reason } : null;
+    })
+    .filter((x): x is { session: AgentSession; score: number; reason: string } => x !== null);
 
-  const userContent = buildUserContent(sha, subject, repo, topLinks);
-  const systemPrompt = k.prompt ?? DEFAULT_SYSTEM_PROMPT;
+  if (fullSessions.length === 0) {
+    log('Linked sessions could not be hydrated to full transcripts — skipping.', verbose);
+    return;
+  }
 
-  log(`Calling ${k.provider}/${k.model}…`, verbose);
-  const result = await extractKnowledge({ provider: k.provider, model: k.model, apiKey, systemPrompt, userContent });
+  log(`Found ${fullSessions.length} linked session(s); fetching diff…`, verbose);
+  const diff = await getCommitDiff(repo, sha);
 
-  const localDir = path.isAbsolute(k.outputDir)
-    ? k.outputDir
-    : path.join(repo, k.outputDir);
+  const userContent = buildPrompt({
+    sha,
+    subject,
+    repo: path.basename(repo),
+    diffSummary: diff,
+    sessions: fullSessions,
+    maxTotalChars: k.maxPromptChars ?? 18000,
+  });
+
+  log(`Calling ${overlay.displayName} (${k.model})…`, verbose);
+  const result = await callProvider({
+    overlay,
+    model: k.model,
+    systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
+    userContent,
+    apiKey: auth.apiKey,
+    baseURL: auth.baseURL,
+    maxTokens: k.maxOutputTokens ?? 2048,
+  });
+
+  if (!result.text.trim()) {
+    log('Provider returned empty text — skipping store.', verbose);
+    return;
+  }
+
+  const localDir = path.isAbsolute(k.outputDir) ? k.outputDir : path.join(repo, k.outputDir);
 
   const { localPath, globalPath } = await storeKnowledge(
     {
