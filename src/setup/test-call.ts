@@ -18,10 +18,16 @@ export async function runTest(): Promise<void> {
   const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
     console.error(`  Auth     : NOT set\n`);
-    if (profile.signupUrl) console.error(`  Get a key at: ${profile.signupUrl}`);
-    const envHint = profile.envVars[0];
-    if (envHint) console.error(`  Then set ${envHint} in your environment`);
-    console.error(`  …or run \`contextberg setup\` to save credentials interactively.`);
+    if (profile.authType === 'oauth_disk') {
+      console.error(`  ${profile.displayName} uses an in-terminal device-code sign-in.`);
+      if (profile.signupUrl) console.error(`  Sign in at: ${profile.signupUrl}`);
+      console.error(`  Run \`contextberg setup\` to start the flow.`);
+    } else {
+      if (profile.signupUrl) console.error(`  Get a key at: ${profile.signupUrl}`);
+      const envHint = profile.envVars[0];
+      if (envHint) console.error(`  Then set ${envHint} in your environment`);
+      console.error(`  …or run \`contextberg setup\` to save it interactively.`);
+    }
     process.exit(1);
   }
   console.log(`  Auth     : ${auth.source}\n`);

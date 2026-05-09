@@ -57,32 +57,31 @@ const codexHooks: ProviderHooks = {
   // the backend with a bespoke fetch and never sends max_output_tokens or
   // temperature in the first place.
   detectAuth: async () => {
-    // Order matters: prefer our own credentials (we own the refresh lifecycle)
-    // over the upstream codex CLI's. Hermes notes refresh_token are single-use,
-    // so reading both back and forth would race.
-    const candidates = [
-      path.join(os.homedir(), '.agent-history', 'codex-auth.json'),
-      path.join(os.homedir(), '.codex', 'auth.json'),
-    ];
-    for (const file of candidates) {
-      try {
-        const raw = await fs.readFile(file, 'utf-8');
-        const data = JSON.parse(raw) as Record<string, unknown>;
-        const tokens = data['tokens'];
-        const access =
-          (tokens && typeof tokens === 'object'
-            ? (tokens as Record<string, unknown>)['access_token']
-            : undefined) ?? data['OPENAI_API_KEY'];
-        if (typeof access === 'string' && access) {
-          const detected: DetectedAuth = {
-            source: file.includes('agent-history') ? 'contextberg_oauth' : 'codex_cli',
-            label: file.replace(os.homedir(), '~'),
-            resolve: async () => access,
-          };
-          return detected;
-        }
-      } catch { /* try next */ }
-    }
+    // Read ONLY our own credential file. Reading another application's
+    // ~/.codex/auth.json crosses a trust boundary the user didn't consent
+    // to, and would race the upstream Codex CLI on refresh_token rotation
+    // (single-use tokens — sharing causes refresh_token_reused failures).
+    // If the user wants Codex auth, they run `contextberg setup` which
+    // triggers our own device-code flow (interactiveAuth) and persists to
+    // ~/.agent-history/codex-auth.json.
+    const file = path.join(os.homedir(), '.agent-history', 'codex-auth.json');
+    try {
+      const raw = await fs.readFile(file, 'utf-8');
+      const data = JSON.parse(raw) as Record<string, unknown>;
+      const tokens = data['tokens'];
+      const access =
+        tokens && typeof tokens === 'object'
+          ? (tokens as Record<string, unknown>)['access_token']
+          : undefined;
+      if (typeof access === 'string' && access) {
+        const detected: DetectedAuth = {
+          source: 'contextberg_oauth',
+          label: '~/.agent-history/codex-auth.json',
+          resolve: async () => access,
+        };
+        return detected;
+      }
+    } catch { /* no credential yet */ }
     return null;
   },
   interactiveAuth: async () => {

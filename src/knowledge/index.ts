@@ -157,13 +157,16 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   const profile = getProfile(k.provider);
   const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
-    const envHint = profile.envVars[0];
-    const lines = [
-      `No credentials for ${profile.displayName}.`,
-      profile.signupUrl ? `  Get a key at: ${profile.signupUrl}` : null,
-      envHint ? `  Then set ${envHint} in your environment` : null,
-      `  …or run \`contextberg setup\` to save credentials interactively.`,
-    ].filter(Boolean) as string[];
+    const lines: string[] = [`No credentials for ${profile.displayName}.`];
+    if (profile.authType === 'oauth_disk') {
+      if (profile.signupUrl) lines.push(`  Sign in at: ${profile.signupUrl}`);
+      lines.push(`  Run \`contextberg setup\` to start the device-code sign-in flow.`);
+    } else {
+      if (profile.signupUrl) lines.push(`  Get a key at: ${profile.signupUrl}`);
+      const envHint = profile.envVars[0];
+      if (envHint) lines.push(`  Then set ${envHint} in your environment`);
+      lines.push(`  …or run \`contextberg setup\` to save it interactively.`);
+    }
     console.error(`[contextberg] ${lines.join('\n  ')}`);
     await finish(sha, 'no-auth', { provider: k.provider }, `missing credentials for ${profile.id}`);
     process.exit(1);
