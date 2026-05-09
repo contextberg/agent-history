@@ -137,14 +137,48 @@ export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult>
         console.log(`\n  ${envHit} is already set in your environment — using it.`);
         liveAuthToken = process.env[envHit];
       } else if (storedKey) {
-        console.log(`\n  Using stored API key from previous setup.`);
-        liveAuthToken = storedKey;
+        // Show last 4 chars so the user can sanity-check WHICH key is stored
+        // before deciding to keep or replace it.
+        const tail = storedKey.slice(-4);
+        console.log(`\n  A key ending in …${tail} is stored from a previous setup.`);
+        const replace = await promptYesNo(rl, '  Replace it with a new key?', false);
+        if (replace) {
+          console.log('');
+          const outcome = await gatherAuth(rl, profile);
+          apiKey = outcome.apiKey;
+          liveAuthToken = outcome.liveToken;
+        } else {
+          liveAuthToken = storedKey;
+          console.log('  Keeping the stored key.');
+        }
       } else {
         const detected = await profile.hooks?.detectAuth?.();
         if (detected) {
-          console.log(`\n  Detected ${detected.label} — using it.`);
-          const tok = await detected.resolve();
-          if (tok) liveAuthToken = tok;
+          // Same idea for OAuth tokens — let the user re-run sign-in if needed
+          // (e.g. the saved token is expired and we don't auto-refresh yet).
+          console.log(`\n  Detected ${detected.label}.`);
+          const reauth = profile.hooks?.interactiveAuth
+            ? await promptYesNo(rl, '  Re-run sign-in to refresh the token?', false)
+            : false;
+          if (reauth && profile.hooks?.interactiveAuth) {
+            try {
+              const token = await profile.hooks.interactiveAuth();
+              if (token) {
+                liveAuthToken = token;
+                console.log('  Saved.');
+              } else {
+                const tok = await detected.resolve();
+                if (tok) liveAuthToken = tok;
+              }
+            } catch (err) {
+              console.log(`  Sign-in failed: ${err instanceof Error ? err.message : String(err)}`);
+              const tok = await detected.resolve();
+              if (tok) liveAuthToken = tok;
+            }
+          } else {
+            const tok = await detected.resolve();
+            if (tok) liveAuthToken = tok;
+          }
         } else {
           // Nothing found — walk the user through getting credentials.
           console.log('');
