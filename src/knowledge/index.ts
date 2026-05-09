@@ -217,6 +217,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   });
 
   log(`Calling ${profile.displayName} (${model.id})…`, verbose);
+  const startedAt = Date.now();
   const result = await callProvider({
     profile,
     model,
@@ -225,6 +226,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     auth,
     maxTokens: k.maxOutputTokens ?? 2048,
   });
+  const durationMs = Date.now() - startedAt;
 
   if (!result.text.trim()) {
     log('Provider returned empty text — skipping store.', verbose);
@@ -233,23 +235,38 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
 
   const localDir = path.isAbsolute(k.outputDir) ? k.outputDir : path.join(repo, k.outputDir);
 
-  const { localPath, globalPath } = await storeKnowledge(
+  const stored = await storeKnowledge(
     {
       sha,
       subject,
       repo,
+      repoName: path.basename(repo),
+      branch: meta.branch,
+      authorName: meta.authorName,
+      authoredAt: meta.authoredAt,
       extractedAt: new Date().toISOString(),
       model: result.model,
       provider: result.provider,
       body: result.text,
+      sessions: fullSessions.map((fs) => ({
+        id: fs.session.id,
+        score: fs.score,
+        reason: fs.reason,
+      })),
+      filesChanged: match.files,
+      inputChars: userContent.length,
+      outputChars: result.text.length,
+      durationMs,
     },
     { localDir },
   );
 
   if (verbose) {
-    if (localPath) console.error(`[contextberg] Saved → ${localPath}`);
-    console.error(`[contextberg] Saved → ${globalPath}`);
+    if (stored.localMdPath) console.error(`[contextberg] Saved → ${stored.localMdPath}`);
+    console.error(`[contextberg] Saved → ${stored.globalMdPath}`);
+    if (stored.changelogPath) console.error(`[contextberg] CHANGELOG → ${stored.changelogPath}`);
   } else {
     console.log(`[contextberg] Knowledge extracted: ${subject.slice(0, 60)}`);
+    if (stored.localMdPath) console.log(`  ${stored.localMdPath}`);
   }
 }

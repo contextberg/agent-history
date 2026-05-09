@@ -4,6 +4,12 @@ import { z } from 'zod';
 import { AgentHistoryService } from '../readers/index.js';
 import type { AgentSource } from '../readers/index.js';
 import { loadConfig, CONFIG_DEFAULTS } from '../config.js';
+import {
+  GetCommitKnowledgeSchema,
+  readCommitKnowledge,
+  formatEntriesAsMarkdown,
+  type GetCommitKnowledgeInput,
+} from './knowledge-tool.js';
 
 const service = new AgentHistoryService();
 
@@ -190,6 +196,39 @@ export async function startMcpServer(): Promise<void> {
         return {
           isError: true,
           content: [{ type: 'text', text: `Error reading agent history: ${String(err)}. Try reducing maxSessions or maxTurnsPerSession, or check that the history directory is readable.` }],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_commit_knowledge',
+    {
+      title: 'Get Commit Knowledge',
+      description:
+        'Retrieve per-commit knowledge notes accumulated by contextberg. ' +
+        'Each entry summarises what was done in a commit and — most usefully — where the work got stuck ' +
+        '(bugs hit, dead ends ruled out, surprising behavior, judgement-call decisions). ' +
+        'Use this to recall how a similar problem was tackled before, what gotchas were uncovered, ' +
+        'or to brief a fresh agent on a repo it has not seen. ' +
+        'Reads from ~/.agent-history/knowledge/<repo>/commits/ written by `contextberg learn`. ' +
+        'Defaults: limit=10 (cap 20), maxCharsPerEntry=1500 (cap 2000).',
+      inputSchema: GetCommitKnowledgeSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params: GetCommitKnowledgeInput) => {
+      try {
+        const entries = await readCommitKnowledge(params);
+        return { content: [{ type: 'text', text: formatEntriesAsMarkdown(entries) }] };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Error reading commit knowledge: ${String(err)}` }],
         };
       }
     },
