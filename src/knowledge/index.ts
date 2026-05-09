@@ -11,6 +11,7 @@ import { writeLinkCache } from './link-cache.js';
 import { buildPrompt } from './transcripts.js';
 import { callProvider, findModel, getProfile, resolveAuth } from './providers/index.js';
 import { inspectCommit, filterDiff } from './commit-filter.js';
+import { appendRunLog, type RunStatus } from './run-log.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -105,11 +106,30 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   const repo = path.resolve(opts.repo ?? process.cwd());
   const ref = opts.commit ?? 'HEAD';
 
+  // Helper to log a terminal status to learn.log without losing the original
+  // control-flow shape (early returns, process.exit on hard errors).
+  const finish = async (
+    sha: string | null,
+    status: RunStatus,
+    extras: Record<string, unknown> = {},
+    reason?: string,
+  ): Promise<void> => {
+    await appendRunLog({
+      ts: new Date().toISOString(),
+      sha,
+      repo,
+      status,
+      ...(reason ? { reason } : {}),
+      ...extras,
+    } as Parameters<typeof appendRunLog>[0]).catch(() => undefined);
+  };
+
   const config = await loadConfig();
   const k = config.knowledge;
 
   if (!k.enabled) {
     log('knowledge extraction is disabled in config.', verbose);
+    await finish(null, 'skip', {}, 'disabled in config');
     return;
   }
 
@@ -118,6 +138,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     sha = await resolveCommitSha(repo, ref);
   } catch {
     console.error(`[contextberg] Could not resolve ${ref} in ${repo}`);
+    await finish(null, 'error', {}, `could not resolve ref ${ref}`);
     process.exit(1);
   }
 
@@ -126,6 +147,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     const inspection = await inspectCommit(repo, sha).catch(() => null);
     if (inspection?.skip) {
       log(`Skipping ${sha.slice(0, 8)}: ${inspection.reason}.`, verbose);
+      await finish(sha, 'skip', {}, inspection.reason ?? undefined);
       return;
     }
   }
@@ -140,6 +162,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     console.error(
       `[contextberg] No credentials for ${profile.displayName}. Set ${envHint}${oauthHint}, or run \`contextberg setup\`.`,
     );
+    await finish(sha, 'no-auth', { provider: k.provider }, `missing ${envHint}`);
     process.exit(1);
   }
   const model = findModel(profile, k.model);
@@ -165,6 +188,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   const match = commitLinks.find((c) => c.sha === sha && c.repo === repo);
   if (!match || match.links.length === 0) {
     log(`No sessions linked to commit ${sha.slice(0, 8)} — nothing to extract.`, verbose);
+    await finish(sha, 'no-sessions', { provider: k.provider, model: k.model });
     return;
   }
 
@@ -193,6 +217,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
 
   if (fullSessions.length === 0) {
     log('Linked sessions could not be hydrated to full transcripts — skipping.', verbose);
+    await finish(sha, 'no-sessions', { provider: k.provider, model: k.model }, 'lineage hydration failed');
     return;
   }
 
@@ -218,18 +243,36 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
 
   log(`Calling ${profile.displayName} (${model.id})…`, verbose);
   const startedAt = Date.now();
-  const result = await callProvider({
-    profile,
-    model,
-    systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
-    userContent,
-    auth,
-    maxTokens: k.maxOutputTokens ?? 2048,
-  });
+  let result;
+  try {
+    result = await callProvider({
+      profile,
+      model,
+      systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
+      userContent,
+      auth,
+      maxTokens: k.maxOutputTokens ?? 2048,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[contextberg] Provider call failed: ${msg}`);
+    await finish(
+      sha,
+      'error',
+      { provider: k.provider, model: k.model, durationMs: Date.now() - startedAt, inputChars: userContent.length },
+      msg,
+    );
+    process.exit(1);
+  }
   const durationMs = Date.now() - startedAt;
 
   if (!result.text.trim()) {
     log('Provider returned empty text — skipping store.', verbose);
+    await finish(
+      sha,
+      'empty',
+      { provider: k.provider, model: k.model, durationMs, inputChars: userContent.length },
+    );
     return;
   }
 
@@ -269,4 +312,13 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     console.log(`[contextberg] Knowledge extracted: ${subject.slice(0, 60)}`);
     if (stored.localMdPath) console.log(`  ${stored.localMdPath}`);
   }
+
+  await finish(sha, 'ok', {
+    provider: result.provider,
+    model: result.model,
+    durationMs,
+    inputChars: userContent.length,
+    outputChars: result.text.length,
+    sessions: fullSessions.map((fs) => fs.session.id),
+  });
 }

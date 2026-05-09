@@ -1,4 +1,4 @@
-import type { KnowledgeProvider } from '../config.js';
+import type { KnowledgeConfig, KnowledgeProvider } from '../config.js';
 import { listProfiles, getProfile } from '../knowledge/providers/index.js';
 import {
   createInterface,
@@ -18,10 +18,22 @@ export interface WizardResult {
   maxSessionsPerCommit: number;
 }
 
-export async function runWizard(): Promise<WizardResult> {
+export interface WizardOptions {
+  /** Existing config — its values become defaults so re-running setup is non-destructive. */
+  current?: KnowledgeConfig;
+}
+
+export async function runWizard(opts: WizardOptions = {}): Promise<WizardResult> {
   if (!isInteractiveStdin()) {
     printNonInteractiveGuidance();
     throw new Error('contextberg setup requires an interactive terminal');
+  }
+
+  const current = opts.current;
+  const isReconfigure = current !== undefined;
+
+  if (isReconfigure) {
+    console.log(`\nReconfiguring (current: ${current!.provider} / ${current!.model}). Press Enter at any prompt to keep the current value.`);
   }
 
   const rl = createInterface();
@@ -29,20 +41,23 @@ export async function runWizard(): Promise<WizardResult> {
     // ── Provider ──────────────────────────────────────────────
     printHeader('Provider');
     const profiles = listProfiles();
+    const defaultProviderIdx = current
+      ? Math.max(0, profiles.findIndex((p) => p.id === current.provider))
+      : 0;
     const providerId = await promptChoice(
       rl,
       'Pick a provider',
       profiles.map((p) => ({
-        label: `${p.displayName}`,
+        label: `${p.displayName}${current && p.id === current.provider ? ' (current)' : ''}`,
         description: p.description,
         value: p.id,
       })),
+      defaultProviderIdx,
     );
     const profile = getProfile(providerId);
+    const stayedOnProvider = current?.provider === providerId;
 
     // ── Auth ──────────────────────────────────────────────────
-    // Resolve auth before model selection so we can live-fetch the model
-    // catalog when the provider supports it (Codex, OpenRouter, etc).
     printHeader('Authentication');
     let apiKey: string | undefined;
     let liveAuthToken: string | undefined;
@@ -52,9 +67,15 @@ export async function runWizard(): Promise<WizardResult> {
       console.log(`  Make sure the server is running at ${profile.baseURL}`);
     } else {
       const envHit = profile.envVars.find((v) => process.env[v]);
+      const storedKey = stayedOnProvider ? current?.apiKey : undefined;
+
       if (envHit) {
         console.log(`\n  ${envHit} is already set — using it.`);
         liveAuthToken = process.env[envHit];
+      } else if (storedKey) {
+        console.log(`\n  Using stored API key from previous setup.`);
+        liveAuthToken = storedKey;
+        // Keep the stored key — only set apiKey if user enters something new.
       } else {
         const detected = await profile.hooks?.detectAuth?.();
         if (detected) {
@@ -78,11 +99,9 @@ export async function runWizard(): Promise<WizardResult> {
     }
 
     // ── Model ─────────────────────────────────────────────────
-    // Try live fetch. Local providers (Ollama / LM Studio) and OpenRouter
-    // don't need auth for /models. Falls back to fallbackModels on any error.
     printHeader('Model');
     let modelChoices = profile.fallbackModels.map((m) => ({
-      label: `${m.id}${m.recommended ? ' (recommended)' : ''}`,
+      label: `${m.id}${m.recommended ? ' (recommended)' : ''}${stayedOnProvider && m.id === current?.model ? ' (current)' : ''}`,
       ...(m.notes ? { description: m.notes } : {}),
       value: m.id,
     }));
@@ -94,26 +113,39 @@ export async function runWizard(): Promise<WizardResult> {
       const live = await profile.hooks.fetchModels(auth).catch(() => null);
       if (live && live.length > 0) {
         const recommended = profile.fallbackModels.find((m) => m.recommended)?.id;
-        modelChoices = live.slice(0, 30).map((id) => ({
-          label: `${id}${id === recommended ? ' (recommended)' : ''}`,
-          value: id,
-        }));
+        modelChoices = live.slice(0, 30).map((id) => {
+          const tags: string[] = [];
+          if (id === recommended) tags.push('recommended');
+          if (stayedOnProvider && id === current?.model) tags.push('current');
+          return {
+            label: `${id}${tags.length > 0 ? ` (${tags.join(', ')})` : ''}`,
+            value: id,
+          };
+        });
         console.log(`  (Live: ${live.length} models from ${profile.displayName})`);
       } else {
         console.log(`  (Using ${profile.fallbackModels.length} fallback models — live fetch unavailable)`);
       }
     }
 
-    const model = await promptChoice(rl, 'Pick a model', modelChoices);
+    // Default to the current model if it's in the offered list — otherwise first.
+    const defaultModelIdx = stayedOnProvider && current?.model
+      ? Math.max(0, modelChoices.findIndex((c) => c.value === current.model))
+      : 0;
+    const model = await promptChoice(rl, 'Pick a model', modelChoices, defaultModelIdx);
 
     // ── Storage ───────────────────────────────────────────────
     printHeader('Storage');
     const outputDir = await prompt(
       rl,
       'Knowledge output dir (relative to repo root)',
-      '.contextberg/knowledge',
+      current?.outputDir ?? '.contextberg/knowledge',
     );
-    const maxRaw = await prompt(rl, 'Max sessions per commit', '3');
+    const maxRaw = await prompt(
+      rl,
+      'Max sessions per commit',
+      String(current?.maxSessionsPerCommit ?? 3),
+    );
     const maxSessionsPerCommit = Math.max(1, parseInt(maxRaw, 10) || 3);
 
     return { provider: providerId, model, apiKey, outputDir, maxSessionsPerCommit };
