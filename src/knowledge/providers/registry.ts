@@ -150,16 +150,31 @@ async function httpFail(res: Response, label: string): Promise<never> {
   throw new Error(`${label}: HTTP ${res.status} ${res.statusText}${trimmed ? ` — ${trimmed}` : ''}`);
 }
 
-async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Promise<string[]> {
+/**
+ * Generic /models fetcher for OpenAI-compatible endpoints — returns every
+ * id verbatim. The OpenAI profile wraps this with isOpenAIChatModel filter
+ * + ranking; OpenCode Go and similar curated catalogs use it raw.
+ */
+async function fetchOpenAICompatModels(auth: ResolvedAuth | null, baseURL: string, label: string): Promise<string[]> {
   if (!auth || !auth.apiKey) throw new Error('no API key configured');
   const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
     headers: { Authorization: `Bearer ${auth.apiKey}` },
   });
-  if (!res.ok) await httpFail(res, 'OpenAI /models');
+  if (!res.ok) await httpFail(res, `${label} /models`);
   const data = (await res.json()) as { data?: Array<{ id?: string }> };
   return (data.data ?? [])
     .map((m) => m.id)
-    .filter((id): id is string => typeof id === 'string' && isOpenAIChatModel(id))
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * OpenAI's catalog is the kitchen sink (embeddings, audio, image…), so apply
+ * the chat-model allowlist + relevance ranking on top of the generic fetch.
+ */
+async function fetchOpenAIModels(auth: ResolvedAuth | null): Promise<string[]> {
+  const all = await fetchOpenAICompatModels(auth, 'https://api.openai.com/v1', 'OpenAI');
+  return all
+    .filter(isOpenAIChatModel)
     .sort((a, b) => rankOpenAIChatModel(a) - rankOpenAIChatModel(b) || a.localeCompare(b));
 }
 
@@ -256,9 +271,7 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
       m('gpt-4o-mini', 128_000, 16_384, 'max_tokens', 'chat'),
       m('o3-mini', 200_000, 100_000, 'max_completion_tokens', 'reasoning'),
     ],
-    hooks: {
-      fetchModels: (auth) => fetchOpenAIModels(auth, 'https://api.openai.com/v1'),
-    },
+    hooks: { fetchModels: (auth) => fetchOpenAIModels(auth) },
   },
 
   google: {
@@ -350,7 +363,7 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
       m('qwen3.5-plus', 128_000, 8192, 'max_tokens', 'chat'),
     ],
     hooks: {
-      fetchModels: (auth) => fetchOpenAIModels(auth, 'https://opencode.ai/zen/go/v1'),
+      fetchModels: (auth) => fetchOpenAICompatModels(auth, 'https://opencode.ai/zen/go/v1', 'OpenCode Go'),
     },
   },
 };
