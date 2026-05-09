@@ -150,17 +150,28 @@ async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Pr
 async function fetchGeminiModels(auth: ResolvedAuth | null): Promise<string[] | null> {
   if (!auth) return null;
   try {
-    // Google's OpenAI-compat /models returns models like "models/gemini-2.5-pro";
-    // strip the "models/" prefix and filter to text-generation Gemini models
-    // (skip embedding-only / image-only entries that share the catalog).
-    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/models', {
-      headers: { Authorization: `Bearer ${auth.apiKey}` },
-    });
+    // Use the NATIVE listing endpoint, not the /openai/ compat path —
+    // the latter often 404s or returns an empty list on this account, while
+    // the native one exposes supportedGenerationMethods so we can filter
+    // out tuned-model and non-generateContent entries cleanly.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(auth.apiKey)}&pageSize=200`;
+    const res = await fetch(url);
     if (!res.ok) return null;
-    const data = (await res.json()) as { data?: Array<{ id?: string }> };
-    return (data.data ?? [])
-      .map((m) => m.id?.replace(/^models\//, ''))
-      .filter((id): id is string => !!id && id.startsWith('gemini-'));
+    const data = (await res.json()) as {
+      models?: Array<{
+        name?: string;
+        displayName?: string;
+        supportedGenerationMethods?: string[];
+      }>;
+    };
+    return (data.models ?? [])
+      .filter((mObj) => mObj.supportedGenerationMethods?.includes('generateContent'))
+      .map((mObj) => mObj.name?.replace(/^models\//, ''))
+      .filter((id): id is string => !!id && id.startsWith('gemini-'))
+      // Skip dated suffixes that just duplicate the unversioned base
+      // (e.g. gemini-2.5-pro-001 next to gemini-2.5-pro).
+      .filter((id) => !/-\d{3}$/.test(id))
+      .sort((a, b) => b.localeCompare(a));  // newest version names sort first
   } catch {
     return null;
   }
