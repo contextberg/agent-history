@@ -125,6 +125,14 @@ export async function loadConfig(): Promise<AgentHistoryConfig> {
 }
 
 export async function saveConfig(config: AgentHistoryConfig): Promise<void> {
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+  // mode 0o700 / 0o600: config.json carries plaintext API keys, so restrict
+  // both the directory and file to the owning user. Silent NOOP on Windows
+  // (NTFS already isolates user dirs) and on container volume mounts where
+  // chmod isn't permitted; the chmod() call is wrapped in try/catch so a
+  // permission denial never breaks `contextberg setup`.
+  await fs.mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  try {
+    await fs.chmod(CONFIG_PATH, 0o600);
+  } catch { /* Windows / read-only mount — defaults are good enough there */ }
 }
