@@ -1,4 +1,5 @@
 import { runSetup, runStatus, runUninstall } from './setup/index.js';
+import { runTest } from './setup/test-call.js';
 import { runLearn } from './knowledge/index.js';
 
 const args = process.argv.slice(2);
@@ -27,6 +28,10 @@ async function main(): Promise<void> {
       await runStatus();
       break;
 
+    case 'test':
+      await runTest();
+      break;
+
     case 'uninstall':
       await runUninstall();
       break;
@@ -53,6 +58,7 @@ Usage:
   contextberg learn --commit <ref>  Extract knowledge from a specific commit
   contextberg learn --repo <path>   Specify repo path (default: cwd)
   contextberg status             Show current configuration and hook status
+  contextberg test               Send a one-shot prompt to verify provider auth
   contextberg uninstall          Remove the post-commit hook from this repo
 `);
 }

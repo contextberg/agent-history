@@ -40,37 +40,28 @@ export async function runWizard(): Promise<WizardResult> {
     );
     const profile = getProfile(providerId);
 
-    // ── Model ─────────────────────────────────────────────────
-    printHeader('Model');
-    const model = await promptChoice(
-      rl,
-      'Pick a model',
-      profile.fallbackModels.map((m) => ({
-        label: `${m.id}${m.recommended ? ' (recommended)' : ''}`,
-        ...(m.notes ? { description: m.notes } : {}),
-        value: m.id,
-      })),
-    );
-
     // ── Auth ──────────────────────────────────────────────────
+    // Resolve auth before model selection so we can live-fetch the model
+    // catalog when the provider supports it (Codex, OpenRouter, etc).
     printHeader('Authentication');
     let apiKey: string | undefined;
+    let liveAuthToken: string | undefined;
 
     if (profile.authType === 'none') {
       console.log(`\n  ${profile.displayName} runs locally — no auth required.`);
       console.log(`  Make sure the server is running at ${profile.baseURL}`);
     } else {
-      // 1. Env var already set?
       const envHit = profile.envVars.find((v) => process.env[v]);
       if (envHit) {
         console.log(`\n  ${envHit} is already set — using it.`);
+        liveAuthToken = process.env[envHit];
       } else {
-        // 2. On-disk credential (Codex)?
         const detected = await profile.hooks?.detectAuth?.();
         if (detected) {
           console.log(`\n  Detected ${detected.label} — using it.`);
+          const tok = await detected.resolve();
+          if (tok) liveAuthToken = tok;
         } else {
-          // 3. Prompt for the key.
           const envHint = profile.envVars[0] ?? 'API key';
           const promptText =
             profile.authType === 'oauth_disk'
@@ -78,12 +69,42 @@ export async function runWizard(): Promise<WizardResult> {
               : `Enter ${envHint} (blank to set later)`;
           const raw = await promptApiKey(rl, promptText);
           apiKey = raw || undefined;
+          if (apiKey) liveAuthToken = apiKey;
           if (profile.signupUrl && !apiKey) {
             console.log(`  Get one at: ${profile.signupUrl}`);
           }
         }
       }
     }
+
+    // ── Model ─────────────────────────────────────────────────
+    // Try live fetch. Local providers (Ollama / LM Studio) and OpenRouter
+    // don't need auth for /models. Falls back to fallbackModels on any error.
+    printHeader('Model');
+    let modelChoices = profile.fallbackModels.map((m) => ({
+      label: `${m.id}${m.recommended ? ' (recommended)' : ''}`,
+      ...(m.notes ? { description: m.notes } : {}),
+      value: m.id,
+    }));
+
+    if (profile.hooks?.fetchModels) {
+      const auth = liveAuthToken
+        ? { apiKey: liveAuthToken, baseURL: profile.baseURL, source: 'wizard' }
+        : null;
+      const live = await profile.hooks.fetchModels(auth).catch(() => null);
+      if (live && live.length > 0) {
+        const recommended = profile.fallbackModels.find((m) => m.recommended)?.id;
+        modelChoices = live.slice(0, 30).map((id) => ({
+          label: `${id}${id === recommended ? ' (recommended)' : ''}`,
+          value: id,
+        }));
+        console.log(`  (Live: ${live.length} models from ${profile.displayName})`);
+      } else {
+        console.log(`  (Using ${profile.fallbackModels.length} fallback models — live fetch unavailable)`);
+      }
+    }
+
+    const model = await promptChoice(rl, 'Pick a model', modelChoices);
 
     // ── Storage ───────────────────────────────────────────────
     printHeader('Storage');
