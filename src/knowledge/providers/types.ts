@@ -9,7 +9,8 @@ export type ProviderId =
   | 'openai'
   | 'google'
   | 'openrouter'
-  | 'codex';
+  | 'codex'
+  | 'opencode-go';
 
 export type Transport = 'anthropic_messages' | 'openai_chat' | 'openai_responses';
 

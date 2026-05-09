@@ -319,6 +319,40 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
     ],
     hooks: { ...codexHooks, fetchModels: (auth) => fetchCodexModels(auth) },
   },
+
+  // OpenCode Go — $10/mo subscription that fronts a basket of "open" models
+  // (GLM, Kimi, MiMo, Qwen, MiniMax). Reference: hermes_cli/auth.py,
+  // hermes_cli/models.py, plugins/model-providers/opencode-zen/__init__.py.
+  // Note: Hermes routes MiniMax-on-this-endpoint through Anthropic Messages
+  // because the upstream serves them under /v1/messages — we skip that
+  // nuance and stick to chat_completions, which covers GLM/Kimi/MiMo/Qwen.
+  // MiniMax models still appear in fallback list but will only work if /v1
+  // accepts them via chat completions on this account.
+  'opencode-go': {
+    id: 'opencode-go',
+    name: 'opencode-go',
+    aliases: ['opencode_go', 'opencode-go-sub'],
+    displayName: 'OpenCode Go ($10/mo)',
+    description: 'Open-model subscription (GLM, Kimi, MiMo, Qwen, MiniMax)',
+    signupUrl: 'https://opencode.ai',
+    transport: 'openai_chat',
+    authType: 'api_key',
+    envVars: ['OPENCODE_GO_API_KEY'],
+    baseURL: 'https://opencode.ai/zen/go/v1',
+    fallbackModels: [
+      m('glm-5', 128_000, 8192, 'max_tokens', 'chat', true),
+      m('glm-5.1', 128_000, 8192, 'max_tokens', 'chat'),
+      m('kimi-k2.5', 200_000, 8192, 'max_tokens', 'chat'),
+      m('kimi-k2.6', 200_000, 8192, 'max_tokens', 'chat'),
+      m('mimo-v2.5-pro', 128_000, 8192, 'max_tokens', 'chat'),
+      m('mimo-v2.5', 128_000, 8192, 'max_tokens', 'chat'),
+      m('qwen3.6-plus', 128_000, 8192, 'max_tokens', 'chat'),
+      m('qwen3.5-plus', 128_000, 8192, 'max_tokens', 'chat'),
+    ],
+    hooks: {
+      fetchModels: (auth) => fetchOpenAIModels(auth, 'https://opencode.ai/zen/go/v1'),
+    },
+  },
 };
 
 export const PROVIDER_PROFILES = PROFILES;

@@ -7,7 +7,8 @@ export type KnowledgeProvider =
   | 'openai'
   | 'google'
   | 'openrouter'
-  | 'codex';
+  | 'codex'
+  | 'opencode-go';
 
 export interface KnowledgeConfig {
   enabled: boolean;
@@ -17,11 +18,12 @@ export interface KnowledgeConfig {
    * Active provider's API key. Kept for backwards compatibility — new code
    * reads from `apiKeys[provider]` first and falls back to this field.
    * Each provider's env vars take priority over both:
-   *   anthropic  → ANTHROPIC_API_KEY
-   *   openai     → OPENAI_API_KEY
-   *   google     → GEMINI_API_KEY / GOOGLE_API_KEY
-   *   openrouter → OPENROUTER_API_KEY
-   *   codex      → device-code OAuth via `contextberg setup`
+   *   anthropic   → ANTHROPIC_API_KEY
+   *   openai      → OPENAI_API_KEY
+   *   google      → GEMINI_API_KEY / GOOGLE_API_KEY
+   *   openrouter  → OPENROUTER_API_KEY
+   *   codex       → device-code OAuth via `contextberg setup`
+   *   opencode-go → OPENCODE_GO_API_KEY
    */
   apiKey?: string;
   /**
