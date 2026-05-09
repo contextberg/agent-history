@@ -1,1 +1,0 @@
-- 2026-05-09 `388bc8f` fix(store): cleaner on-disk layout — day folders, HH-MM names, hidden .data/  ([detail](2026-05/10/fix-store-cleaner-on-disk-layout.md))

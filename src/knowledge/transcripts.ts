@@ -1,13 +1,11 @@
 import path from 'node:path';
-import type { AgentSession, AgentTurn, AssistantItem, ToolCall } from '../readers/types.js';
+import type { AgentSession, AgentTurn, AssistantItem } from '../readers/types.js';
 
 interface BuildTranscriptOptions {
   /** Hard cap on user message size per turn. */
   maxUserChars: number;
   /** Hard cap on assistant text size per turn. */
   maxAssistantChars: number;
-  /** Hard cap on captured tool I/O per turn (across all tools in that turn). */
-  maxToolIOChars: number;
   /** Hard cap on total chars per session block. */
   maxSessionChars: number;
   /** Render at most this many turns per session. */
@@ -19,7 +17,6 @@ interface BuildTranscriptOptions {
 const DEFAULTS: BuildTranscriptOptions = {
   maxUserChars: 600,
   maxAssistantChars: 1500,
-  maxToolIOChars: 600,
   maxSessionChars: 6000,
   maxTurnsPerSession: 12,
 };
@@ -29,101 +26,27 @@ function clip(text: string, max: number): string {
   return text.slice(0, max) + '…';
 }
 
-/**
- * Tools whose output materially helps the LLM understand the session
- * (errors, test failures, file contents the assistant read). Other tools'
- * outputs are usually voluminous noise.
- */
-const TOOL_OUTPUT_WORTH_KEEPING = new Set([
-  'Bash', 'bash', 'shell', 'exec',
-  'Read', 'read', 'read_file', 'view',
-  'Grep', 'grep', 'search',
-]);
-
-function renderToolCall(call: ToolCall, budgetLeft: number): { text: string; consumed: number } {
-  const keyArg = pickKeyArg(call);
-  const detail = pickContentExcerpt(call);
-  const head = `TOOL ${call.name}${keyArg ? ' ' + keyArg : ''}${detail ? `\n  ⋮ ${detail}` : ''}`;
-
-  if (!call.output || !TOOL_OUTPUT_WORTH_KEEPING.has(call.name) || budgetLeft <= 0) {
-    return { text: head, consumed: head.length };
-  }
-
-  // For Bash/exec output, prefer lines that look like errors/diagnostics.
-  const trimmed = highlightErrors(call.output, Math.min(budgetLeft, 400));
-  if (!trimmed) return { text: head, consumed: head.length };
-  const text = `${head}\n  → ${trimmed}`;
-  return { text, consumed: text.length };
-}
-
-function pickKeyArg(call: ToolCall): string {
-  const input = call.input;
-  const candidates = ['file_path', 'path', 'filePath', 'command', 'cmd', 'pattern', 'query', 'url'];
-  for (const k of candidates) {
-    const v = input[k];
-    if (typeof v === 'string' && v) {
-      if (k === 'command' || k === 'cmd') return clip(stripBoilerplate(v), 250);
-      return path.basename(v);
-    }
-  }
-  return '';
-}
-
-/**
- * For Edit / Write / MultiEdit tools, surface the actual content being written
- * (truncated). Without this we know "Edit src/foo.ts" but not what changed —
- * which is exactly the question the LLM is trying to answer.
- */
-function pickContentExcerpt(call: ToolCall): string {
-  const input = call.input;
-  const candidates = ['new_string', 'content', 'text', 'patch'];
-  for (const k of candidates) {
-    const v = input[k];
-    if (typeof v === 'string' && v.trim()) {
-      const oneLine = v.replace(/\s+/g, ' ').trim();
-      return clip(oneLine, 200);
-    }
-  }
-  return '';
-}
-
-function stripBoilerplate(cmd: string): string {
-  // `cd /repo/path && actual-command` — keep just the actual-command part.
-  const m = cmd.match(/^cd\s+\S+\s*&&\s*(.+)$/s);
-  return m && m[1] ? m[1] : cmd;
-}
-
-const ERROR_LINE_RE = /^(error|err|fail|fatal|panic|✗|×|TypeError|ReferenceError|SyntaxError|❌|.*\bError\b)/i;
-
-function highlightErrors(output: string, budget: number): string {
-  const lines = output.split('\n').filter((l) => l.trim());
-  const errorLines = lines.filter((l) => ERROR_LINE_RE.test(l));
-  const picked = errorLines.length > 0 ? errorLines.slice(0, 6) : lines.slice(0, 6);
-  const joined = picked.join(' / ');
-  return clip(joined, budget);
-}
-
 function renderTurn(turn: AgentTurn, opts: BuildTranscriptOptions): string {
   const parts: string[] = [];
 
   const user = clip(turn.userMessage.trim(), opts.maxUserChars);
   if (user) parts.push(`USER: ${user}`);
 
-  // Render items in order, with text and tool calls interleaved as they occurred.
+  // Tool execution traces are intentionally OMITTED from the prompt — what
+  // the assistant *said* (intent, decisions, gotchas it called out) is
+  // signal; tool call I/O is mostly noise that crowds the context. The same
+  // policy applies in src/mcp/server.ts via includeToolCalls=false defaults.
+  // We still surface the list of edited files below since that's a one-line
+  // summary, not an execution trace.
   let assistantBudget = opts.maxAssistantChars;
-  let toolBudget = opts.maxToolIOChars;
   for (const item of turn.items) {
-    if (assistantBudget <= 0 && toolBudget <= 0) break;
+    if (assistantBudget <= 0) break;
     if (isText(item)) {
       const t = item.text.trim();
       if (!t) continue;
       const slice = clip(t, Math.min(assistantBudget, opts.maxAssistantChars));
       parts.push(`ASSISTANT: ${slice}`);
       assistantBudget -= slice.length;
-    } else if (isTool(item)) {
-      const { text, consumed } = renderToolCall(item.tool, toolBudget);
-      parts.push(text);
-      toolBudget -= consumed;
     }
   }
 
@@ -137,10 +60,6 @@ function renderTurn(turn: AgentTurn, opts: BuildTranscriptOptions): string {
 
 function isText(item: AssistantItem): item is { kind: 'text'; text: string } {
   return item.kind === 'text';
-}
-
-function isTool(item: AssistantItem): item is { kind: 'tool'; tool: ToolCall } {
-  return item.kind === 'tool';
 }
 
 /**

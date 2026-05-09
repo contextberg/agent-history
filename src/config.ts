@@ -7,11 +7,7 @@ export type KnowledgeProvider =
   | 'openai'
   | 'google'
   | 'openrouter'
-  | 'codex'
-  | 'ollama'
-  | 'lmstudio'
-  | 'deepseek'
-  | 'xai';
+  | 'codex';
 
 export interface KnowledgeConfig {
   enabled: boolean;
@@ -23,11 +19,7 @@ export interface KnowledgeConfig {
    *   openai     → OPENAI_API_KEY
    *   google     → GEMINI_API_KEY / GOOGLE_API_KEY
    *   openrouter → OPENROUTER_API_KEY
-   *   codex      → CODEX_API_KEY (or ~/.codex/auth.json OAuth)
-   *   deepseek   → DEEPSEEK_API_KEY
-   *   xai        → XAI_API_KEY
-   *   ollama     → none (local)
-   *   lmstudio   → none (local)
+   *   codex      → device-code OAuth via `contextberg setup`
    */
   apiKey?: string;
   /** Path relative to repo root, or absolute. */

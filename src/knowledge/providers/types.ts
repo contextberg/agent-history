@@ -9,11 +9,7 @@ export type ProviderId =
   | 'openai'
   | 'google'
   | 'openrouter'
-  | 'codex'
-  | 'ollama'
-  | 'lmstudio'
-  | 'deepseek'
-  | 'xai';
+  | 'codex';
 
 export type Transport = 'anthropic_messages' | 'openai_chat' | 'openai_responses';
 

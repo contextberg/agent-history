@@ -109,23 +109,20 @@ async function fetchOpenAIModels(auth: ResolvedAuth | null, baseURL: string): Pr
   }
 }
 
-async function fetchOllamaModels(): Promise<string[] | null> {
+async function fetchGeminiModels(auth: ResolvedAuth | null): Promise<string[] | null> {
+  if (!auth) return null;
   try {
-    const res = await fetch('http://localhost:11434/api/tags');
-    if (!res.ok) return null;
-    const data = (await res.json()) as { models?: Array<{ name?: string }> };
-    return (data.models ?? []).map((m) => m.name).filter((n): n is string => !!n);
-  } catch {
-    return null;
-  }
-}
-
-async function fetchLmstudioModels(): Promise<string[] | null> {
-  try {
-    const res = await fetch('http://localhost:1234/v1/models');
+    // Google's OpenAI-compat /models returns models like "models/gemini-2.5-pro";
+    // strip the "models/" prefix and filter to text-generation Gemini models
+    // (skip embedding-only / image-only entries that share the catalog).
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/models', {
+      headers: { Authorization: `Bearer ${auth.apiKey}` },
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as { data?: Array<{ id?: string }> };
-    return (data.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
+    return (data.data ?? [])
+      .map((m) => m.id?.replace(/^models\//, ''))
+      .filter((id): id is string => !!id && id.startsWith('gemini-'));
   } catch {
     return null;
   }
@@ -231,6 +228,7 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
       m('gemini-2.5-flash', 1_000_000, 8192, 'max_tokens', 'chat'),
       m('gemini-2.5-flash-lite', 1_000_000, 8192, 'max_tokens', 'chat'),
     ],
+    hooks: { fetchModels: (auth) => fetchGeminiModels(auth) },
   },
 
   openrouter: {
@@ -271,79 +269,6 @@ const PROFILES: Record<ProviderId, ProviderProfile> = {
       m('gpt-5', 200_000, 16_384, 'max_output_tokens', 'reasoning'),
     ],
     hooks: { ...codexHooks, fetchModels: (auth) => fetchCodexModels(auth) },
-  },
-
-  ollama: {
-    id: 'ollama',
-    name: 'ollama',
-    displayName: 'Ollama (local)',
-    description: 'Local models via Ollama (no auth required)',
-    signupUrl: 'https://ollama.com/download',
-    transport: 'openai_chat',
-    authType: 'none',
-    envVars: [],
-    baseURL: 'http://localhost:11434/v1',
-    fallbackModels: [
-      m('llama3.1:8b', 128_000, 4096, 'max_tokens', 'chat', true),
-      m('qwen2.5-coder:7b', 32_000, 4096, 'max_tokens', 'code'),
-    ],
-    hooks: { fetchModels: () => fetchOllamaModels() },
-  },
-
-  lmstudio: {
-    id: 'lmstudio',
-    name: 'lmstudio',
-    aliases: ['lm-studio'],
-    displayName: 'LM Studio (local)',
-    description: 'Local models via LM Studio (no auth required)',
-    signupUrl: 'https://lmstudio.ai',
-    transport: 'openai_chat',
-    authType: 'none',
-    envVars: [],
-    baseURL: 'http://localhost:1234/v1',
-    fallbackModels: [
-      // LM Studio model IDs depend entirely on what the user loaded — fall back fetch
-      m('local-model', 32_000, 4096, 'max_tokens', 'chat', true),
-    ],
-    hooks: { fetchModels: () => fetchLmstudioModels() },
-  },
-
-  deepseek: {
-    id: 'deepseek',
-    name: 'deepseek',
-    displayName: 'DeepSeek',
-    description: 'DeepSeek API — strong reasoning at low cost',
-    signupUrl: 'https://platform.deepseek.com/api_keys',
-    transport: 'openai_chat',
-    authType: 'api_key',
-    envVars: ['DEEPSEEK_API_KEY'],
-    baseURL: 'https://api.deepseek.com/v1',
-    fallbackModels: [
-      m('deepseek-chat', 64_000, 8192, 'max_tokens', 'chat', true),
-      m('deepseek-reasoner', 64_000, 8192, 'max_tokens', 'reasoning'),
-    ],
-    hooks: {
-      fetchModels: (auth) => fetchOpenAIModels(auth, 'https://api.deepseek.com/v1'),
-    },
-  },
-
-  xai: {
-    id: 'xai',
-    name: 'xai',
-    aliases: ['grok'],
-    displayName: 'xAI (Grok)',
-    description: 'Grok API from xAI',
-    signupUrl: 'https://console.x.ai',
-    transport: 'openai_chat',
-    authType: 'api_key',
-    envVars: ['XAI_API_KEY'],
-    baseURL: 'https://api.x.ai/v1',
-    fallbackModels: [
-      m('grok-2-latest', 131_072, 8192, 'max_tokens', 'chat', true),
-    ],
-    hooks: {
-      fetchModels: (auth) => fetchOpenAIModels(auth, 'https://api.x.ai/v1'),
-    },
   },
 };
 
