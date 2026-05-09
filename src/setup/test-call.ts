@@ -1,5 +1,6 @@
 import { loadConfig } from '../config.js';
 import { callProvider, findModel, getProfile, resolveAuth } from '../knowledge/providers/index.js';
+import { authMissingHint } from './auth-help.js';
 
 /**
  * Smoke test: send a one-shot prompt to the configured provider and print
@@ -17,9 +18,8 @@ export async function runTest(): Promise<void> {
 
   const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
-    const envHint = profile.envVars[0] ?? 'an API key';
-    const oauthHint = profile.authType === 'oauth_disk' ? ' or run `codex login`' : '';
-    console.error(`  Auth     : NOT set — set ${envHint}${oauthHint}`);
+    console.error(`  Auth     : NOT set\n`);
+    console.error(authMissingHint(profile));
     process.exit(1);
   }
   console.log(`  Auth     : ${auth.source}\n`);

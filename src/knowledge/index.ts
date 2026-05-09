@@ -157,12 +157,9 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   const profile = getProfile(k.provider);
   const auth = await resolveAuth(profile, k.apiKey);
   if (!auth) {
-    const envHint = profile.envVars[0] ?? 'an API key';
-    const oauthHint = profile.authType === 'oauth_disk' ? ' or run `codex login`' : '';
-    console.error(
-      `[contextberg] No credentials for ${profile.displayName}. Set ${envHint}${oauthHint}, or run \`contextberg setup\`.`,
-    );
-    await finish(sha, 'no-auth', { provider: k.provider }, `missing ${envHint}`);
+    const { authMissingHint } = await import('../setup/auth-help.js');
+    console.error(`[contextberg] ${authMissingHint(profile)}`);
+    await finish(sha, 'no-auth', { provider: k.provider }, `missing credentials for ${profile.id}`);
     process.exit(1);
   }
   const model = findModel(profile, k.model);

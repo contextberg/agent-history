@@ -53,16 +53,9 @@ function codexHeaders(auth: ResolvedAuth): Record<string, string> {
 
 const codexHooks: ProviderHooks = {
   buildHeaders: codexHeaders,
-  prepareRequest: (kwargs) => {
-    // chatgpt.com/backend-api/codex rejects max_output_tokens AND temperature
-    // with 400 — strip them defensively even if the transport sets them.
-    const out = { ...kwargs };
-    delete out['max_output_tokens'];
-    delete out['max_tokens'];
-    delete out['max_completion_tokens'];
-    delete out['temperature'];
-    return out;
-  },
+  // No prepareRequest needed — the Codex transport (callOpenAIResponses) hits
+  // the backend with a bespoke fetch and never sends max_output_tokens or
+  // temperature in the first place.
   detectAuth: async () => {
     const candidates = [path.join(os.homedir(), '.codex', 'auth.json')];
     for (const file of candidates) {
