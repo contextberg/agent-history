@@ -96,6 +96,13 @@ export async function loadConfig(): Promise<AgentHistoryConfig> {
       ...CONFIG_DEFAULTS.knowledge,
       ...parsed.knowledge,
     };
+    // Migration: bump configs that still hold the previous-generation
+    // defaults to the current production values. Detection is exact-match
+    // against the old defaults so explicit user customisations survive.
+    if (knowledge.maxPromptChars === 18_000) knowledge.maxPromptChars = 400_000;
+    if (knowledge.maxOutputTokens === 2048) knowledge.maxOutputTokens = 4096;
+    if (knowledge.maxSessionsPerCommit === 3) knowledge.maxSessionsPerCommit = 5;
+
     // Back-compat: lift legacy single `apiKey` into the per-provider map so
     // the wizard sees it the next time the user switches providers and back.
     if (knowledge.apiKey && !knowledge.apiKeys?.[knowledge.provider]) {

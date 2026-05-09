@@ -244,7 +244,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     diffSummary: diff,
     commitFiles: match.files,
     sessions: fullSessions,
-    maxTotalChars: k.maxPromptChars ?? 18000,
+    maxTotalChars: k.maxPromptChars ?? 400_000,
   });
 
   log(`Calling ${profile.displayName} (${model.id})…`, verbose);
@@ -257,7 +257,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
       systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
       userContent,
       auth,
-      maxTokens: k.maxOutputTokens ?? 2048,
+      maxTokens: k.maxOutputTokens ?? 4096,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
