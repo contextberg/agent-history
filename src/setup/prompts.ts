@@ -53,46 +53,80 @@ export async function prompt(
 
 /**
  * Masked-input prompt for API keys. Each typed/pasted character renders as
- * `*` so the user can SEE that the paste registered (the previous version
- * echoed nothing, leaving them to wonder whether anything was captured).
- * Falls back to plain prompt when stdin isn't a TTY (CI / piped input).
+ * `*` (paste of N chars → N stars) so the user can SEE that the input
+ * registered, closing the feedback gap that made the previous version feel
+ * broken. Falls back to plain prompt when stdin isn't a TTY (CI / piped).
  *
- * After Enter, the caller (gatherAuth) prints a confirmation line with the
- * captured length and last-4 characters — closing the feedback loop without
- * exposing the full key.
+ * Implementation: take exclusive control of stdin in raw mode, read bytes
+ * one chunk at a time, echo `*` for each printable char, restore the
+ * caller's readline interface on Enter / Ctrl+C. This is what works
+ * cross-platform — the prior monkey-patch of stdout.write didn't fire on
+ * Windows because readline's echo path there bypasses process.stdout.
  */
 export async function promptApiKey(rl: RL, question: string): Promise<string> {
   if (!input.isTTY) {
     return prompt(rl, question);
   }
-  const stdout = output as NodeJS.WriteStream & { _orig_write?: typeof output.write };
-  stdout._orig_write = stdout.write.bind(stdout);
+
   process.stdout.write(`${question}: `);
 
-  let done = false;
-  stdout.write = ((chunk: string | Buffer): boolean => {
-    if (done) return stdout._orig_write!(chunk);
-    const str = typeof chunk === 'string' ? chunk : chunk.toString();
-    // Newline / CR → terminate the visual line as usual.
-    if (str.includes('\n') || str.includes('\r')) return stdout._orig_write!('\n');
-    // Backspace / DEL → forward the erase-sequence so the on-screen cursor
-    // backs up over the asterisks the user is deleting.
-    if (str === '\x08' || str === '\x7f' || str === '\b \b') {
-      return stdout._orig_write!('\b \b');
-    }
-    // Replace each printable ASCII char with `*` (paste of length N → N stars).
-    const stars = str.replace(/[\x20-\x7e]/g, '*');
-    if (stars) return stdout._orig_write!(stars);
-    return true;
-  }) as typeof stdout.write;
+  // Suspend the wizard's rl so we can claim stdin without two consumers
+  // racing for keypresses.
+  rl.pause();
 
-  try {
-    const raw = await rl.question('');
-    return raw.trim();
-  } finally {
-    done = true;
-    stdout.write = stdout._orig_write!;
-  }
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw === true;
+  if (!wasRaw) stdin.setRawMode(true);
+  stdin.resume();
+
+  // Park the wizard rl's data listeners — readline registers a 'data'
+  // listener on stdin that would still fire alongside ours. Restore on exit.
+  const previousListeners = stdin.listeners('data') as Array<(chunk: Buffer | string) => void>;
+  for (const l of previousListeners) stdin.removeListener('data', l);
+  stdin.setEncoding('utf8');
+
+  return new Promise<string>((resolve) => {
+    let buf = '';
+
+    const cleanup = (): void => {
+      stdin.removeListener('data', onData);
+      if (!wasRaw) stdin.setRawMode(false);
+      for (const l of previousListeners) stdin.on('data', l);
+      rl.resume();
+    };
+
+    const onData = (chunk: string | Buffer): void => {
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      for (const ch of text) {
+        const code = ch.charCodeAt(0);
+        if (code === 13 || code === 10) {                  // Enter / LF
+          process.stdout.write('\n');
+          cleanup();
+          resolve(buf.trim());
+          return;
+        }
+        if (code === 3) {                                  // Ctrl+C
+          process.stdout.write('\n');
+          cleanup();
+          process.exit(130);
+        }
+        if (code === 8 || code === 127) {                  // Backspace / DEL
+          if (buf.length > 0) {
+            buf = buf.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+          continue;
+        }
+        if (code >= 32 && code < 127) {                    // printable ASCII
+          buf += ch;
+          process.stdout.write('*');
+        }
+        // Other control chars (esc sequences, arrow keys, etc.) silently ignored.
+      }
+    };
+
+    stdin.on('data', onData);
+  });
 }
 
 export async function promptYesNo(
