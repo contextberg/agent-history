@@ -81,7 +81,11 @@ export const CONFIG_DEFAULTS: AgentHistoryConfig = {
     // ChatGPT-subscription quotas and any modern provider's context window.
     // Per-model caps still apply via callOpenAIChat / clampMaxTokens.
     maxPromptChars: 400_000,
-    maxOutputTokens: 4096,
+    // Same generous ceiling for the response. clampMaxTokens() in the
+    // transport pins this down to whatever the chosen model actually
+    // supports (e.g. Claude Sonnet 4.5 → 8192) so a 100k cap on a model
+    // with a smaller window simply becomes the model's own limit.
+    maxOutputTokens: 100_000,
   },
 };
 
@@ -96,11 +100,13 @@ export async function loadConfig(): Promise<AgentHistoryConfig> {
       ...CONFIG_DEFAULTS.knowledge,
       ...parsed.knowledge,
     };
-    // Migration: bump configs that still hold the previous-generation
-    // defaults to the current production values. Detection is exact-match
-    // against the old defaults so explicit user customisations survive.
+    // Migration: bump configs that still hold a previous-generation default
+    // to the current production value. Detection is exact-match against
+    // every old default so explicit user customisations survive.
     if (knowledge.maxPromptChars === 18_000) knowledge.maxPromptChars = 400_000;
-    if (knowledge.maxOutputTokens === 2048) knowledge.maxOutputTokens = 4096;
+    if (knowledge.maxOutputTokens === 2048 || knowledge.maxOutputTokens === 4096) {
+      knowledge.maxOutputTokens = 100_000;
+    }
     if (knowledge.maxSessionsPerCommit === 3) knowledge.maxSessionsPerCommit = 5;
 
     // Back-compat: lift legacy single `apiKey` into the per-provider map so

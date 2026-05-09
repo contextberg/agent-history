@@ -257,7 +257,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
       systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
       userContent,
       auth,
-      maxTokens: k.maxOutputTokens ?? 4096,
+      maxTokens: k.maxOutputTokens ?? 100_000,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
