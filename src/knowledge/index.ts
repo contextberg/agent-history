@@ -10,6 +10,7 @@ import { storeKnowledge } from './store.js';
 import { writeLinkCache } from './link-cache.js';
 import { buildPrompt } from './transcripts.js';
 import { callProvider, getOverlay, resolveAuth } from './providers/index.js';
+import { inspectCommit, filterDiff } from './commit-filter.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -19,6 +20,8 @@ export interface LearnOptions {
   /** Absolute path to the repo. Defaults to process.cwd(). */
   repo?: string;
   verbose?: boolean;
+  /** Skip the commit filter (for manual re-runs). */
+  force?: boolean;
 }
 
 function log(msg: string, verbose: boolean): void {
@@ -30,16 +33,36 @@ async function resolveCommitSha(repo: string, ref: string): Promise<string> {
   return stdout.trim();
 }
 
-async function getCommitSubject(repo: string, sha: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['-C', repo, 'log', '-1', '--pretty=%s', sha]);
-  return stdout.trim();
+interface CommitMeta {
+  subject: string;
+  body: string;
+  authorName: string;
+  authoredAt: string;
+  branch: string;
 }
 
-/**
- * Compact diff: file headers + first ~80 lines per hunk. Full diffs blow up
- * the prompt budget without adding much signal beyond what the touched-files
- * list already conveys.
- */
+async function getCommitMeta(repo: string, sha: string): Promise<CommitMeta> {
+  // Use a custom delimiter to safely capture multiline body without subprocess churn.
+  const FMT = ['%s', '%b', '%an', '%aI'].join('%x1f');
+  const { stdout: log } = await execFileAsync('git', ['-C', repo, 'log', '-1', `--pretty=format:${FMT}`, sha]);
+  const [subject = '', body = '', authorName = '', authoredAt = ''] = log.split('\x1f');
+
+  let branch = '';
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', repo, 'symbolic-ref', '--short', 'HEAD']);
+    branch = stdout.trim();
+  } catch { /* detached HEAD */ }
+
+  return { subject: subject.trim(), body: body.trim(), authorName: authorName.trim(), authoredAt: authoredAt.trim(), branch };
+}
+
+function extractStatsLine(diff: string): string {
+  // git show --stat ends with a line like:
+  //   "5 files changed, 120 insertions(+), 8 deletions(-)"
+  const m = diff.match(/^\s*\d+ files? changed.*$/m);
+  return m ? m[0].trim() : '';
+}
+
 async function getCommitDiff(repo: string, sha: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync(
@@ -51,6 +74,30 @@ async function getCommitDiff(repo: string, sha: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/**
+ * Walk the resumedFrom chain so a session that picked up where another left
+ * off carries its parent's context too. Bounded to 4 hops to avoid pathological
+ * loops in malformed metadata.
+ */
+function expandLineage(
+  seeds: AgentSession[],
+  byId: Map<string, AgentSession>,
+): AgentSession[] {
+  const out: AgentSession[] = [];
+  const seen = new Set<string>();
+  for (const s of seeds) {
+    let current: AgentSession | undefined = s;
+    let hops = 0;
+    while (current && !seen.has(current.id) && hops < 4) {
+      seen.add(current.id);
+      out.push(current);
+      current = current.resumedFrom ? byId.get(current.resumedFrom) : undefined;
+      hops += 1;
+    }
+  }
+  return out;
 }
 
 export async function runLearn(opts: LearnOptions = {}): Promise<void> {
@@ -66,6 +113,25 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     return;
   }
 
+  let sha: string;
+  try {
+    sha = await resolveCommitSha(repo, ref);
+  } catch {
+    console.error(`[contextberg] Could not resolve ${ref} in ${repo}`);
+    process.exit(1);
+  }
+
+  // Cheap commit-level checks before we touch sessions or call the LLM.
+  if (!opts.force) {
+    const inspection = await inspectCommit(repo, sha).catch(() => null);
+    if (inspection?.skip) {
+      log(`Skipping ${sha.slice(0, 8)}: ${inspection.reason}.`, verbose);
+      return;
+    }
+  }
+
+  // API auth comes after the cheap filter — no point validating creds for a
+  // commit we'd skip anyway.
   const overlay = getOverlay(k.provider);
   const auth = await resolveAuth(overlay, k.apiKey);
   if (!auth) {
@@ -77,16 +143,15 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     process.exit(1);
   }
 
-  let sha: string;
-  try {
-    sha = await resolveCommitSha(repo, ref);
-  } catch {
-    console.error(`[contextberg] Could not resolve ${ref} in ${repo}`);
-    process.exit(1);
-  }
-
   log(`Processing commit ${sha.slice(0, 8)} in ${repo}`, verbose);
-  const subject = await getCommitSubject(repo, sha).catch(() => sha.slice(0, 8));
+  const meta = await getCommitMeta(repo, sha).catch(() => ({
+    subject: sha.slice(0, 8),
+    body: '',
+    authorName: '',
+    authoredAt: '',
+    branch: '',
+  }));
+  const subject = meta.subject;
 
   const service = new AgentHistoryService();
   const sessions = await service.getSessions();
@@ -106,26 +171,46 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   for (const s of sessions) sessionById.set(s.id, s);
 
   const topLinks = match.links.slice(0, k.maxSessionsPerCommit);
-  const fullSessions = topLinks
-    .map((link) => {
-      const full = sessionById.get(link.session.id);
-      return full ? { session: full, score: link.score, reason: link.reason } : null;
-    })
-    .filter((x): x is { session: AgentSession; score: number; reason: string } => x !== null);
+  const seeds = topLinks
+    .map((link) => sessionById.get(link.session.id))
+    .filter((s): s is AgentSession => s !== undefined);
+
+  const linked = expandLineage(seeds, sessionById);
+
+  // Re-pair lineage members with the score of their seed (parent inherits child's score).
+  const scoreById = new Map<string, { score: number; reason: string }>();
+  for (const link of topLinks) {
+    scoreById.set(link.session.id, { score: link.score, reason: link.reason });
+  }
+  const fullSessions = linked.map((session) => {
+    const meta = scoreById.get(session.id) ?? {
+      score: 0.0,
+      reason: 'lineage parent (resumedFrom)',
+    };
+    return { session, ...meta };
+  });
 
   if (fullSessions.length === 0) {
     log('Linked sessions could not be hydrated to full transcripts — skipping.', verbose);
     return;
   }
 
-  log(`Found ${fullSessions.length} linked session(s); fetching diff…`, verbose);
-  const diff = await getCommitDiff(repo, sha);
+  log(`Found ${fullSessions.length} session(s) (incl. lineage); fetching diff…`, verbose);
+  const rawDiff = await getCommitDiff(repo, sha);
+  const diff = filterDiff(rawDiff);
+  const stats = extractStatsLine(rawDiff);
 
   const userContent = buildPrompt({
     sha,
     subject,
+    body: meta.body,
+    authorName: meta.authorName,
+    authoredAt: meta.authoredAt,
+    branch: meta.branch,
+    stats,
     repo: path.basename(repo),
     diffSummary: diff,
+    commitFiles: match.files,
     sessions: fullSessions,
     maxTotalChars: k.maxPromptChars ?? 18000,
   });
