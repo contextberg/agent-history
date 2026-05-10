@@ -7,7 +7,11 @@ import { runLearn } from './knowledge/index.js';
 import { showPrompt } from './setup/show-prompt.js';
 
 const args = process.argv.slice(2);
-const command = args[0];
+// Treat a leading flag (`--dev`, `--mcp`, `--help`) as "no subcommand" — the
+// flag itself is consumed below. Without this, invocations like
+// `tsx watch src/cli.ts --dev` would land in the `default:` arm and exit 1
+// with "Unknown command: --dev".
+const command = args[0]?.startsWith('-') ? undefined : args[0];
 
 // Mode flags can appear before or after subcommands; check globally.
 const isMcp = args.includes('--mcp');
