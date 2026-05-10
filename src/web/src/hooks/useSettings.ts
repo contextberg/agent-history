@@ -20,8 +20,8 @@ const DEFAULTS: AppSettings = {
     includeToolCalls: true,
     includeToolOutputs: false,
     maxSessions: 10,
-    maxTurnsPerSession: 5,
-    maxCharsPerField: 500,
+    maxTurnsPerSession: 30,
+    maxCharsPerField: 100_000,
   },
 };
 

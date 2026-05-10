@@ -115,11 +115,11 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
             value={settings.mcp.includeToolOutputs}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, includeToolOutputs: v } })}
           />
-          <NumberInput label="Max sessions" value={settings.mcp.maxSessions} min={1} max={50}
+          <NumberInput label="Max sessions" value={settings.mcp.maxSessions} min={1}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxSessions: v } })} />
-          <NumberInput label="Max turns per session" value={settings.mcp.maxTurnsPerSession} min={1} max={20}
+          <NumberInput label="Max turns per session" value={settings.mcp.maxTurnsPerSession} min={1}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxTurnsPerSession: v } })} />
-          <NumberInput label="Max chars per field" value={settings.mcp.maxCharsPerField} min={100} max={2000}
+          <NumberInput label="Max chars per field" value={settings.mcp.maxCharsPerField} min={100}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxCharsPerField: v } })} />
         </div>
       </section>
@@ -219,7 +219,8 @@ function SelectRow({ label, value, options, onChange }: { label: string; value: 
   );
 }
 
-function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
+function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max?: number; onChange: (v: number) => void }) {
+  const clamp = (n: number) => Math.max(min, max !== undefined ? Math.min(max, n) : n);
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 0' }}>
       <p style={{ margin: 0, fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{label}</p>
@@ -227,8 +228,8 @@ function NumberInput({ label, value, min, max, onChange }: { label: string; valu
         type="number"
         value={value}
         min={min}
-        max={max}
-        onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value))))}
+        {...(max !== undefined ? { max } : {})}
+        onChange={(e) => onChange(clamp(Number(e.target.value)))}
         style={{
           width: 72,
           textAlign: 'center',

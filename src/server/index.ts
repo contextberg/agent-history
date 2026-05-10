@@ -10,6 +10,9 @@ import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
 import { aggregateCommits } from './commits.js';
 import { readAllLinkCaches } from '../knowledge/link-cache.js';
+import { readRecentRuns } from '../knowledge/run-log.js';
+import { findCommitKnowledge } from '../knowledge/store.js';
+import { CommitWatcher, type WatcherEvent } from './commit-watcher.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.join(__dirname, 'web');
@@ -30,6 +33,11 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }
   });
+
+  // Construct the watcher up front so route handlers can close over it. We
+  // start it once (after the routes are registered) and re-seed it from the
+  // /api/settings path when the watched-repo list changes.
+  const watcher = new CommitWatcher();
 
   app.get('/api/sessions', async (req) => {
     const query = req.query as Record<string, string>;
@@ -87,11 +95,84 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
       knowledge: { ...current.knowledge, ...body.knowledge },
     };
     await saveConfig(updated);
+    // Re-seed the watcher when the watched-repo set changes — adding a fresh
+    // repo via the wizard while the viewer is already running should "just
+    // work" without needing a restart.
+    const before = current.knowledge.watchedRepos ?? [];
+    const after = updated.knowledge.watchedRepos ?? [];
+    if (!sameStringList(before, after)) {
+      watcher.stop();
+      await watcher.start();
+    }
     return updated;
   });
 
+  // Recent runs endpoint — powers the "auto-learn activity" pane in the UI
+  // and answers "did the watcher actually fire?" without grepping the log file.
+  app.get('/api/learn-runs', async (req) => {
+    const query = req.query as Record<string, string>;
+    const n = Math.min(Math.max(Number(query['limit'] ?? '20'), 1), 100);
+    const runs = await readRecentRuns(n);
+    return { runs };
+  });
+
+  // Per-commit knowledge note (the LLM-produced summary). The CommitView
+  // pulls this when the user opens a commit, and a 404 here is the normal
+  // pre-learn state — the UI just shows an empty hint in that case.
+  app.get('/api/commit-knowledge', async (req, reply) => {
+    const query = req.query as Record<string, string>;
+    const sha = (query['sha'] ?? '').trim();
+    const repoAbs = (query['repo'] ?? '').trim();
+    if (!sha || !repoAbs) {
+      return reply.status(400).send({ error: 'sha and repo query params are required' });
+    }
+    const repoName = path.basename(repoAbs);
+    const found = await findCommitKnowledge(repoName, sha);
+    if (!found) return reply.status(404).send({ error: 'No knowledge note for this commit yet.' });
+    return {
+      sha: found.entry.sha,
+      subject: found.entry.subject,
+      repoName: found.entry.repoName,
+      branch: found.entry.branch,
+      authoredAt: found.entry.authoredAt,
+      extractedAt: found.entry.extractedAt,
+      provider: found.entry.provider,
+      model: found.entry.model,
+      body: found.entry.body,
+      sessions: found.entry.sessions,
+      filesChanged: found.entry.filesChanged,
+      mdPath: found.mdPath,
+    };
+  });
+
+  // SSE feed of commit-watcher events. Clients use EventSource('/api/events').
+  // Keep-alive every 25s to defeat proxy idle timeouts; the disconnect path
+  // unsubscribes the listener so we don't leak emitter handlers.
+  app.get('/api/events', async (_req, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    const send = (ev: WatcherEvent): void => {
+      reply.raw.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
+    };
+    const unsubscribe = watcher.onAny(send);
+    const keepalive = setInterval(() => reply.raw.write(`: keepalive\n\n`), 25_000);
+    reply.raw.on('close', () => {
+      clearInterval(keepalive);
+      unsubscribe();
+    });
+  });
+
+  // Boot the watcher AFTER the routes are registered so the very first
+  // /api/events client can attach before any commit fires.
+  await watcher.start();
+
   const shutdown = async (signal: NodeJS.Signals) => {
     process.stdout.write(`\n[agent-history] ${signal} received, releasing port...\n`);
+    watcher.stop();
     try { await app.close(); } catch { /* ignore */ }
     process.exit(0);
   };
@@ -120,6 +201,14 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     console.log(`agent-history running at ${url}`);
     await open(url);
   }
+}
+
+function sameStringList(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+  return true;
 }
 
 async function listenWithFallback(

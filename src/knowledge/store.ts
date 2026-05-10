@@ -270,3 +270,75 @@ export async function storeKnowledge(
 export function globalKnowledgeDir(): string {
   return path.join(CONFIG_DIR, 'knowledge');
 }
+
+/**
+ * Look up the per-commit knowledge note for a given (repo, sha) pair from
+ * the global mirror. Used by the viewer's `/api/commit-knowledge` endpoint
+ * so the by-commit drill-down can show the LLM-produced summary inline.
+ *
+ * The global mirror is always written by `storeKnowledge`, even when a local
+ * (repo-relative) mirror is also written, so this is the canonical source.
+ * We walk `<root>/<repoName>/YYYY-MM/DD/.data/*.json` and return the first
+ * entry whose `sha` matches.
+ *
+ * Returns null when no note has been extracted for this commit yet — that's
+ * the normal pre-learn state, not an error.
+ */
+export async function findCommitKnowledge(
+  repoName: string,
+  sha: string,
+): Promise<{ entry: KnowledgeEntry; mdPath: string; jsonPath: string } | null> {
+  if (!repoName || !sha) return null;
+  const root = path.join(globalKnowledgeDir(), repoName);
+
+  let monthDirs: import('node:fs').Dirent[];
+  try {
+    monthDirs = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const m of monthDirs) {
+    if (!m.isDirectory()) continue;
+    const monthPath = path.join(root, m.name);
+    let dayDirs: import('node:fs').Dirent[];
+    try {
+      dayDirs = await fs.readdir(monthPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const d of dayDirs) {
+      if (!d.isDirectory()) continue;
+      const dataDir = path.join(monthPath, d.name, '.data');
+      let jsonFiles: string[];
+      try {
+        jsonFiles = await fs.readdir(dataDir);
+      } catch {
+        continue;
+      }
+      for (const f of jsonFiles) {
+        if (!f.endsWith('.json')) continue;
+        const jsonPath = path.join(dataDir, f);
+        let raw: string;
+        try {
+          raw = await fs.readFile(jsonPath, 'utf-8');
+        } catch {
+          continue;
+        }
+        let entry: KnowledgeEntry;
+        try {
+          entry = JSON.parse(raw) as KnowledgeEntry;
+        } catch {
+          continue;
+        }
+        if (entry.sha === sha) {
+          const baseName = f.replace(/\.json$/, '');
+          const mdPath = path.join(monthPath, d.name, `${baseName}.md`);
+          return { entry, mdPath, jsonPath };
+        }
+      }
+    }
+  }
+
+  return null;
+}

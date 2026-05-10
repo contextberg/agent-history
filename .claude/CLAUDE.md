@@ -5,7 +5,9 @@ Product context and user-facing documentation live in `README.md`. This file cov
 ## Architecture
 
 ```
-src/cli.ts               # entry: --mcp → MCP stdio, --dev → API only (Vite handles UI), default → web server + open browser
+src/contextberg.ts       # SOLE CLI entry — bare → web server, --mcp → MCP stdio, --dev → API only,
+                         # subcommands: setup / learn / status / test / show-prompt / uninstall
+src/cli.ts               # `agent-history` bin alias — `import './contextberg.js'` only, no logic
 src/config.ts            # ~/.agent-history/config.json — persisted defaults
 src/readers/
   types.ts               # AgentSession / AgentTurn / IReader / ReaderOptions
@@ -22,7 +24,7 @@ src/web/                 # Vite root (React 19 + Tailwind v4) → builds to dist
 
 **One model, all sources.** Every reader collapses its format into `AgentSession`. UI and MCP code never branch on `source`. If you need per-source logic above the reader layer, push it down into the reader.
 
-**MCP caps protect the downstream agent.** Responses are hard-capped (`maxSessions ≤ 50`, `maxTurnsPerSession ≤ 20`, `maxCharsPerField ≤ 2000`) on top of user config. These outputs land in another agent's context window — raise caps carefully.
+**MCP defaults, no hard caps.** `maxSessions` (10), `maxTurnsPerSession` (30), `maxCharsPerField` (100_000) are defaults only. The user-supplied value is the upper bound — there are no remaining ceilings on the MCP request schema or in the response clamping. The output lands in another agent's context window, so when raising defaults, do it deliberately.
 
 ## Conventions
 

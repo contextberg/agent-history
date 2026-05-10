@@ -1,7 +1,7 @@
 import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
 import { runWizard } from './wizard.js';
-import { installHook, getHookStatus, uninstallHook } from './hooks.js';
+import { registerRepo, unregisterRepo, getRepoStatus, removeLegacyHook } from './repos.js';
 import { getProfile, resolveAuth } from '../knowledge/providers/index.js';
 import { readRecentRuns, runLogPath } from '../knowledge/run-log.js';
 
@@ -42,21 +42,31 @@ export async function runSetup(): Promise<void> {
   await saveConfig(config);
   console.log('\n  Config saved.');
 
-  const status = await getHookStatus();
+  const status = await getRepoStatus();
   if (!status.repoRoot) {
-    console.log('  Not inside a git repository — skipping hook installation.');
+    console.log('  Not inside a git repository — skipping repo registration.');
     console.log('\nSetup complete. Run `contextberg learn` manually to extract knowledge from commits.');
     return;
   }
 
-  if (status.installed) {
-    console.log(`  post-commit hook already installed in ${status.repoRoot}`);
+  if (status.watched) {
+    console.log(`  Already watching: ${status.repoRoot}`);
   } else {
-    const { repoRoot } = await installHook();
-    console.log(`  post-commit hook installed in ${repoRoot}`);
+    const { repoRoot } = await registerRepo();
+    console.log(`  Watching: ${repoRoot}`);
   }
 
-  console.log('\nSetup complete. Knowledge will be extracted automatically on each git commit.');
+  // One-time migration: a previous install may have left a per-repo
+  // post-commit hook behind. The watcher supersedes it; running both would
+  // double-fire `runLearn` on every commit. Quietly clean it up.
+  if (status.legacyHookInstalled && status.repoRoot) {
+    const removed = await removeLegacyHook(status.repoRoot);
+    if (removed) {
+      console.log(`  Legacy post-commit hook removed (watcher takes over).`);
+    }
+  }
+
+  console.log('\nSetup complete. While `contextberg` is running, every new commit in this repo will trigger knowledge extraction in the background.');
 }
 
 export async function runStatus(): Promise<void> {
@@ -64,7 +74,8 @@ export async function runStatus(): Promise<void> {
   const k = config.knowledge;
   const profile = getProfile(k.provider);
   const auth = await resolveAuth(profile, k.apiKey);
-  const status = await getHookStatus();
+  const status = await getRepoStatus();
+  const watched = k.watchedRepos ?? [];
 
   const authLabel =
     profile.authType === 'none'
@@ -79,7 +90,19 @@ export async function runStatus(): Promise<void> {
   console.log(`  Output   : ${k.outputDir}`);
   console.log(`  Max sess : ${k.maxSessionsPerCommit}`);
   console.log(`  Auth     : ${authLabel}`);
-  console.log(`  Hook     : ${status.installed ? `installed (${status.repoRoot})` : 'not installed'}`);
+  if (watched.length === 0) {
+    console.log(`  Watched  : (none — run \`contextberg setup\` inside a repo to add it)`);
+  } else {
+    console.log(`  Watched  : ${watched.length} repo(s)`);
+    for (const r of watched) {
+      const here = status.repoRoot && r === status.repoRoot ? ' ← cwd' : '';
+      console.log(`             - ${r}${here}`);
+    }
+  }
+  if (status.legacyHookInstalled) {
+    console.log(`  Legacy   : post-commit hook still present in ${status.repoRoot}`);
+    console.log(`             (run \`contextberg uninstall\` here to remove it — watcher already supersedes it)`);
+  }
 
   // Recent runs from learn.log — answers "did the hook actually fire?"
   const recent = await readRecentRuns(5);
@@ -113,6 +136,13 @@ export async function runStatus(): Promise<void> {
 }
 
 export async function runUninstall(): Promise<void> {
-  await uninstallHook();
-  console.log('post-commit hook removed.');
+  const result = await unregisterRepo().catch((err) => {
+    console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  });
+  if (!result) return;
+  console.log(`Stopped watching ${result.repoRoot}.`);
+  if (result.removedLegacyHook) {
+    console.log('Legacy post-commit hook removed.');
+  }
 }

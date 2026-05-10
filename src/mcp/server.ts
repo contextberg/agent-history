@@ -20,15 +20,15 @@ const GetAgentHistorySchema = z.object({
   date: z.string()
     .optional()
     .describe('ISO date string (e.g. "2026-05-06"). Omit to search all history.'),
-  maxSessions: z.number().int().min(1).max(50)
+  maxSessions: z.number().int().min(1)
     .optional()
-    .describe(`Max sessions to return (hard cap: 50). Default: ${CONFIG_DEFAULTS.mcp.maxSessions}.`),
-  maxTurnsPerSession: z.number().int().min(1).max(20)
+    .describe(`Max sessions to return. Default: ${CONFIG_DEFAULTS.mcp.maxSessions}.`),
+  maxTurnsPerSession: z.number().int().min(1)
     .optional()
-    .describe(`Max turns per session (hard cap: 20). Default: ${CONFIG_DEFAULTS.mcp.maxTurnsPerSession}.`),
-  maxCharsPerField: z.number().int().min(1).max(2000)
+    .describe(`Max turns per session. Default: ${CONFIG_DEFAULTS.mcp.maxTurnsPerSession}.`),
+  maxCharsPerField: z.number().int().min(1)
     .optional()
-    .describe(`Max characters per text field (hard cap: 2000). Default: ${CONFIG_DEFAULTS.mcp.maxCharsPerField}.`),
+    .describe(`Max characters per text field. Default: ${CONFIG_DEFAULTS.mcp.maxCharsPerField}.`),
   includeToolCalls: z.boolean()
     .optional()
     .describe('List tool call names used in each turn. Default: true.'),
@@ -72,9 +72,9 @@ export async function startMcpServer(): Promise<void> {
       const config = await loadConfig();
       const d = config.mcp;
 
-      const maxSessions = Math.min(params.maxSessions ?? d.maxSessions, 50);
-      const maxTurnsPerSession = Math.min(params.maxTurnsPerSession ?? d.maxTurnsPerSession, 20);
-      const maxCharsPerField = Math.min(params.maxCharsPerField ?? d.maxCharsPerField, 2000);
+      const maxSessions = params.maxSessions ?? d.maxSessions;
+      const maxTurnsPerSession = params.maxTurnsPerSession ?? d.maxTurnsPerSession;
+      const maxCharsPerField = params.maxCharsPerField ?? d.maxCharsPerField;
       const includeToolCalls = params.includeToolCalls ?? d.includeToolCalls;
       const includeToolOutputs = params.includeToolOutputs ?? d.includeToolOutputs;
       const responseFormat = params.response_format ?? 'markdown';

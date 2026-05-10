@@ -42,6 +42,18 @@ export interface KnowledgeConfig {
   maxPromptChars?: number;
   /** Max output tokens. */
   maxOutputTokens?: number;
+  /**
+   * Absolute repo paths that the running viewer should watch for new commits.
+   * `contextberg setup` adds the current repo here; the in-process commit
+   * watcher (src/server/commit-watcher.ts) tails each repo's `.git/logs/HEAD`
+   * and fires `runLearn` in the background when a new commit lands.
+   *
+   * Replaces the per-repo `.git/hooks/post-commit` mechanism: the LLM call no
+   * longer blocks `git commit`, the viewer can push UI updates as soon as a
+   * note is written, and there is one central list to manage instead of N
+   * hook files scattered across repos.
+   */
+  watchedRepos?: string[];
 }
 
 export interface AgentHistoryConfig {
@@ -68,8 +80,8 @@ export const CONFIG_DEFAULTS: AgentHistoryConfig = {
     includeToolCalls: true,
     includeToolOutputs: false,
     maxSessions: 10,
-    maxTurnsPerSession: 5,
-    maxCharsPerField: 500,
+    maxTurnsPerSession: 30,
+    maxCharsPerField: 100_000,
   },
   knowledge: {
     enabled: true,
@@ -86,6 +98,7 @@ export const CONFIG_DEFAULTS: AgentHistoryConfig = {
     // supports (e.g. Claude Sonnet 4.5 → 8192) so a 100k cap on a model
     // with a smaller window simply becomes the model's own limit.
     maxOutputTokens: 100_000,
+    watchedRepos: [],
   },
 };
 
@@ -114,9 +127,18 @@ export async function loadConfig(): Promise<AgentHistoryConfig> {
     if (knowledge.apiKey && !knowledge.apiKeys?.[knowledge.provider]) {
       knowledge.apiKeys = { ...(knowledge.apiKeys ?? {}), [knowledge.provider]: knowledge.apiKey };
     }
+
+    // Migration: previous defaults were too tight for real cross-agent
+    // history reuse. Bump silently; explicit user choices survive.
+    const mcp = { ...CONFIG_DEFAULTS.mcp, ...parsed.mcp };
+    if (mcp.maxTurnsPerSession === 5) mcp.maxTurnsPerSession = 30;
+    if (mcp.maxCharsPerField === 500 || mcp.maxCharsPerField === 2000) {
+      mcp.maxCharsPerField = 100_000;
+    }
+
     return {
       display: { ...CONFIG_DEFAULTS.display, ...parsed.display },
-      mcp: { ...CONFIG_DEFAULTS.mcp, ...parsed.mcp },
+      mcp,
       knowledge,
     };
   } catch {

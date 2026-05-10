@@ -62,3 +62,20 @@ export interface CommitWithLinks {
   files: string[];
   links: CommitLink[];
 }
+
+export interface CommitKnowledge {
+  sha: string;
+  subject: string;
+  repoName: string;
+  branch: string;
+  authoredAt: string;
+  extractedAt: string;
+  provider: string;
+  model: string;
+  /** Markdown body produced by the LLM (no frontmatter, no header). */
+  body: string;
+  sessions: Array<{ id: string; score: number; reason: string }>;
+  filesChanged: string[];
+  /** Absolute path to the saved .md file (global mirror). */
+  mdPath: string;
+}
