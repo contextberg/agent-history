@@ -1,0 +1,74 @@
+{
+  "name": "@contextberg/agent-history",
+  "version": "0.1.12",
+  "description": "Browse and copy AI coding agent transcripts from Claude Code, Cursor, OpenClaw and more",
+  "license": "MIT",
+  "author": "Contextberg",
+  "homepage": "https://contextberg.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/contextberg/agent-history.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "claude",
+    "cursor",
+    "mcp",
+    "transcript",
+    "history"
+  ],
+  "type": "module",
+  "bin": {
+    "agent-history": "dist/cli.js",
+    "contextberg": "dist/contextberg.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c bgBlue.bold,bgGreen.bold \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "tsx watch src/cli.ts --dev",
+    "dev:web": "vite --open",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "tsup",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
+    "@fastify/static": "^8.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-separator": "^1.1.8",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "fastify": "^5.0.0",
+    "fastify-plugin": "^5.0.0",
+    "glob": "^11.0.0",
+    "open": "^10.0.0",
+    "openai": "^6.37.0",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^9.2.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

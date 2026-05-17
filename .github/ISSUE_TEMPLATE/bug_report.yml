@@ -1,0 +1,122 @@
+name: "🐛 Bug Report"
+description: Something is broken or behaves incorrectly.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A few quick checks first:
+        - Search [existing issues](https://github.com/contextberg/agent-history/issues) for duplicates.
+        - Run `npx -y @contextberg/agent-history@latest …` to confirm the bug exists on the latest version.
+        - For setup / installation problems, use the **Setup Help** template instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What went wrong?
+      description: Clear description of the bug. Include error messages or stack traces if you have them.
+      placeholder: |
+        Running `contextberg learn --commit HEAD` exits with X but I expected Y.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps that trigger the bug. Exact commands you ran.
+      placeholder: |
+        1. `contextberg setup` → pick OpenRouter → paste key
+        2. `contextberg test`
+        3. Error: …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      validations:
+        required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which area of the project?
+      multiple: true
+      options:
+        - Web UI / API server (`agent-history`)
+        - MCP server (`--mcp`)
+        - `contextberg setup` (interactive wizard)
+        - `contextberg learn` (per-commit knowledge extraction)
+        - `contextberg test` / `status` / `show-prompt`
+        - Provider transport (Anthropic / OpenAI / Google / OpenRouter / Codex / OpenCode Go)
+        - Reader for an agent tool (Claude Code / Cursor / Codex / Hermes / OpenClaw)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Knowledge Provider (if relevant)
+      multiple: true
+      options:
+        - N/A (not provider-related)
+        - Anthropic
+        - OpenAI
+        - Google (Gemini API key)
+        - OpenRouter
+        - Codex (ChatGPT subscription)
+        - OpenCode Go
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: Ubuntu 24.04 / macOS 15.2 / Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js Version
+      description: Output of `node --version`
+      placeholder: v22.10.0
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package Version
+      description: Output of `npm ls -g @contextberg/agent-history` or the commit SHA you ran from.
+      placeholder: 0.1.10
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Output
+      description: |
+        Paste relevant terminal output. For knowledge-extraction issues, the JSON line for this run from
+        `~/.agent-history/learn.log` is the single most useful piece of info.
+      render: shell
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Root Cause / Proposed Fix (optional)
+      description: |
+        If you've already traced the bug, share the file path and what you think is wrong.
+      placeholder: |
+        `src/knowledge/store.ts:215` — the slug truncation drops the last word when subject ends in a 1-2 char token.
+
+  - type: checkboxes
+    id: pr-ready
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to submit a PR for this myself.

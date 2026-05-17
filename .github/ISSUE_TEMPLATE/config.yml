@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://github.com/contextberg/agent-history/blob/main/README.md
+    about: Check the README before opening an issue.
+  - name: 🤝 Contributing Guide
+    url: https://github.com/contextberg/agent-history/blob/main/CONTRIBUTING.md
+    about: Read this before submitting a PR.
+  - name: 🔒 Security Policy
+    url: https://github.com/contextberg/agent-history/security/policy
+    about: Reporting a vulnerability — please use Security Advisories, not public issues.

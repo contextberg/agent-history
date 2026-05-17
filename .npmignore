@@ -1,0 +1,5 @@
+src
+.claude
+.github
+*.config.ts
+tsconfig.json

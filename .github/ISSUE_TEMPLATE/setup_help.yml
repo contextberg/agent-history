@@ -1,0 +1,105 @@
+name: "🔧 Setup / Installation Help"
+description: Trouble with `npx @contextberg/agent-history`, `contextberg setup`, or the post-commit hook.
+title: "[Setup]: "
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sorry you're hitting trouble. A couple of fast self-checks first:
+
+        - Re-run on the latest version: `npx -y @contextberg/agent-history@latest`
+        - For provider/auth issues, `contextberg test` is the quickest way to see whether the request
+          actually reaches the provider — error messages there are typed (HTTP status + body).
+        - Check `~/.agent-history/learn.log` for the JSON line of the last `learn` run.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What's failing?
+      description: Describe what you tried and where it broke.
+      placeholder: |
+        Ran `contextberg setup`, picked Codex, started device-code flow, but polling never completes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Exact Commands
+      description: Copy/paste the commands you ran.
+      placeholder: |
+        1. `npx -y @contextberg/agent-history`
+        2. `contextberg setup`
+        3. Selected: Codex
+        4. After signing in at chatgpt.com/codex/device, terminal hung at "Waiting for sign-in…"
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you run contextberg?
+      options:
+        - npx (one-shot)
+        - npm install -g
+        - Cloned the repo and ran `npm run …`
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where did it break?
+      options:
+        - Web UI / `agent-history` startup
+        - MCP server (`--mcp`)
+        - `contextberg setup` — provider selection / auth / model picker
+        - `contextberg test` — provider call
+        - `contextberg learn` — per-commit run
+        - post-commit hook (auto-trigger after `git commit`)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: Ubuntu 24.04 / macOS 15.2 / Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js Version
+      description: Output of `node --version`
+      placeholder: v22.10.0
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package Version
+      placeholder: 0.1.10
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Full Error Output
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What I've Already Tried
+      placeholder: |
+        - Re-ran `contextberg setup` and entered the key again
+        - Confirmed `OPENROUTER_API_KEY` is exported in my shell
+        - Tried `contextberg test` — got the same error
