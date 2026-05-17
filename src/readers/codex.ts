@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
 import { truncate, isWithinDate, selectTurns } from './utils.js';
 import { wslHomePaths } from './wsl.js';
@@ -245,7 +244,10 @@ async function parseSession(
 
   const stat = await fs.stat(filePath).catch(() => null);
   const session: AgentSession = {
-    id: randomUUID(),
+    // Codex rollout filenames are stable across reads; session ids must be too.
+    // Random ids made cached commit links impossible to hydrate on the next
+    // request, so "By commit" rows looked valid but could not open transcripts.
+    id: path.basename(filePath, '.jsonl'),
     source: 'codex',
     project,
     startedAt: startedAt ?? stat?.mtime ?? new Date(),

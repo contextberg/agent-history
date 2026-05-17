@@ -17,6 +17,10 @@ const execFileAsync = promisify(execFile);
  */
 export async function wslHomePaths(subPath: string): Promise<string[]> {
   if (process.platform !== 'win32') return [];
+  // Escape hatch for sandboxed runs (the demo, headless tests). WSL homes are
+  // absolute UNC paths and are NOT shielded by a HOME / USERPROFILE swap, so
+  // the real user's WSL data would otherwise leak into a sandboxed viewer.
+  if (process.env['AGENT_HISTORY_DISABLE_WSL']) return [];
 
   const distros = await listWslDistros();
   if (distros.length === 0) return [];

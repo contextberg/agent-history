@@ -25,6 +25,36 @@ export interface LearnOptions {
   force?: boolean;
 }
 
+/**
+ * Outcome of a `runLearn` call. Lifted out of stderr/process.exit so the
+ * function can be invoked from any context — CLI, post-commit hook, or the
+ * MCP `extract_commit_knowledge` tool. CLI translates `error` / `no-auth`
+ * into exit code 1; every other status exits 0.
+ */
+export interface LearnRunResult {
+  status: RunStatus;
+  /** Resolved 40-char SHA. null when the ref couldn't be resolved. */
+  sha: string | null;
+  repo: string;
+  /** Commit subject, when we managed to read it. */
+  subject?: string;
+  /** Why this status — skip reason, error message, etc. */
+  reason?: string;
+  provider?: string;
+  model?: string;
+  durationMs?: number;
+  inputChars?: number;
+  outputChars?: number;
+  /** Sessions actually fed to the LLM. */
+  sessionIds?: string[];
+  /** Repo-local path to the saved knowledge note (when status === 'ok'). */
+  localMdPath?: string | null;
+  /** Cross-repo mirror path (~/.agent-history/knowledge/<repo>/...). */
+  globalMdPath?: string;
+  /** CHANGELOG.md updated by storeKnowledge, when applicable. */
+  changelogPath?: string | null;
+}
+
 function log(msg: string, verbose: boolean): void {
   if (verbose) console.error(`[contextberg] ${msg}`);
 }
@@ -101,27 +131,31 @@ function expandLineage(
   return out;
 }
 
-export async function runLearn(opts: LearnOptions = {}): Promise<void> {
+export async function runLearn(opts: LearnOptions = {}): Promise<LearnRunResult> {
   const verbose = opts.verbose ?? false;
   const repo = path.resolve(opts.repo ?? process.cwd());
   const ref = opts.commit ?? 'HEAD';
 
-  // Helper to log a terminal status to learn.log without losing the original
-  // control-flow shape (early returns, process.exit on hard errors).
-  const finish = async (
-    sha: string | null,
-    status: RunStatus,
-    extras: Record<string, unknown> = {},
-    reason?: string,
-  ): Promise<void> => {
-    await appendRunLog({
+  // Build the result object, append to learn.log, and return it. Every
+  // termination point goes through here so callers (CLI, post-commit hook,
+  // MCP `extract_commit_knowledge`) get a consistent shape and the run-log
+  // stays the single source of truth for "what happened".
+  const finish = async (result: LearnRunResult): Promise<LearnRunResult> => {
+    const entry: Parameters<typeof appendRunLog>[0] = {
       ts: new Date().toISOString(),
-      sha,
-      repo,
-      status,
-      ...(reason ? { reason } : {}),
-      ...extras,
-    } as Parameters<typeof appendRunLog>[0]).catch(() => undefined);
+      sha: result.sha,
+      repo: result.repo,
+      status: result.status,
+    };
+    if (result.reason) entry.reason = result.reason;
+    if (result.provider) entry.provider = result.provider;
+    if (result.model) entry.model = result.model;
+    if (result.durationMs !== undefined) entry.durationMs = result.durationMs;
+    if (result.inputChars !== undefined) entry.inputChars = result.inputChars;
+    if (result.outputChars !== undefined) entry.outputChars = result.outputChars;
+    if (result.sessionIds) entry.sessions = result.sessionIds;
+    await appendRunLog(entry).catch(() => undefined);
+    return result;
   };
 
   const config = await loadConfig();
@@ -129,8 +163,7 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
 
   if (!k.enabled) {
     log('knowledge extraction is disabled in config.', verbose);
-    await finish(null, 'skip', {}, 'disabled in config');
-    return;
+    return finish({ status: 'skip', sha: null, repo, reason: 'disabled in config' });
   }
 
   let sha: string;
@@ -138,8 +171,12 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     sha = await resolveCommitSha(repo, ref);
   } catch {
     console.error(`[contextberg] Could not resolve ${ref} in ${repo}`);
-    await finish(null, 'error', {}, `could not resolve ref ${ref}`);
-    process.exit(1);
+    return finish({
+      status: 'error',
+      sha: null,
+      repo,
+      reason: `could not resolve ref ${ref}`,
+    });
   }
 
   // Cheap commit-level checks before we touch sessions or call the LLM.
@@ -147,8 +184,12 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     const inspection = await inspectCommit(repo, sha).catch(() => null);
     if (inspection?.skip) {
       log(`Skipping ${sha.slice(0, 8)}: ${inspection.reason}.`, verbose);
-      await finish(sha, 'skip', {}, inspection.reason ?? undefined);
-      return;
+      return finish({
+        status: 'skip',
+        sha,
+        repo,
+        ...(inspection.reason ? { reason: inspection.reason } : {}),
+      });
     }
   }
 
@@ -168,8 +209,13 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
       lines.push(`  …or run \`contextberg setup\` to save it interactively.`);
     }
     console.error(`[contextberg] ${lines.join('\n  ')}`);
-    await finish(sha, 'no-auth', { provider: k.provider }, `missing credentials for ${profile.id}`);
-    process.exit(1);
+    return finish({
+      status: 'no-auth',
+      sha,
+      repo,
+      provider: k.provider,
+      reason: `missing credentials for ${profile.id}`,
+    });
   }
   const model = findModel(profile, k.model);
 
@@ -194,8 +240,14 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   const match = commitLinks.find((c) => c.sha === sha && c.repo === repo);
   if (!match || match.links.length === 0) {
     log(`No sessions linked to commit ${sha.slice(0, 8)} — nothing to extract.`, verbose);
-    await finish(sha, 'no-sessions', { provider: k.provider, model: k.model });
-    return;
+    return finish({
+      status: 'no-sessions',
+      sha,
+      repo,
+      subject,
+      provider: k.provider,
+      model: k.model,
+    });
   }
 
   const sessionById = new Map<string, AgentSession>();
@@ -223,8 +275,15 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
 
   if (fullSessions.length === 0) {
     log('Linked sessions could not be hydrated to full transcripts — skipping.', verbose);
-    await finish(sha, 'no-sessions', { provider: k.provider, model: k.model }, 'lineage hydration failed');
-    return;
+    return finish({
+      status: 'no-sessions',
+      sha,
+      repo,
+      subject,
+      provider: k.provider,
+      model: k.model,
+      reason: 'lineage hydration failed',
+    });
   }
 
   log(`Found ${fullSessions.length} session(s) (incl. lineage); fetching diff…`, verbose);
@@ -262,24 +321,32 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[contextberg] Provider call failed: ${msg}`);
-    await finish(
+    return finish({
+      status: 'error',
       sha,
-      'error',
-      { provider: k.provider, model: k.model, durationMs: Date.now() - startedAt, inputChars: userContent.length },
-      msg,
-    );
-    process.exit(1);
+      repo,
+      subject,
+      provider: k.provider,
+      model: k.model,
+      durationMs: Date.now() - startedAt,
+      inputChars: userContent.length,
+      reason: msg,
+    });
   }
   const durationMs = Date.now() - startedAt;
 
   if (!result.text.trim()) {
     log('Provider returned empty text — skipping store.', verbose);
-    await finish(
+    return finish({
+      status: 'empty',
       sha,
-      'empty',
-      { provider: k.provider, model: k.model, durationMs, inputChars: userContent.length },
-    );
-    return;
+      repo,
+      subject,
+      provider: k.provider,
+      model: k.model,
+      durationMs,
+      inputChars: userContent.length,
+    });
   }
 
   const localDir = path.isAbsolute(k.outputDir) ? k.outputDir : path.join(repo, k.outputDir);
@@ -319,12 +386,19 @@ export async function runLearn(opts: LearnOptions = {}): Promise<void> {
     if (stored.localMdPath) console.log(`  ${stored.localMdPath}`);
   }
 
-  await finish(sha, 'ok', {
+  return finish({
+    status: 'ok',
+    sha,
+    repo,
+    subject,
     provider: result.provider,
     model: result.model,
     durationMs,
     inputChars: userContent.length,
     outputChars: result.text.length,
-    sessions: fullSessions.map((fs) => fs.session.id),
+    sessionIds: fullSessions.map((fs) => fs.session.id),
+    localMdPath: stored.localMdPath,
+    globalMdPath: stored.globalMdPath,
+    changelogPath: stored.changelogPath,
   });
 }

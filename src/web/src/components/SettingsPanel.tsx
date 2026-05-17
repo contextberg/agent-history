@@ -1,7 +1,6 @@
 import React from 'react';
 import type { AppSettings } from '../hooks/useSettings';
-import type { ViewSettings, AccentName, TranscriptStyle, ToolStyle, Density } from '../hooks/useViewSettings';
-import { ACCENT_PRESETS } from '../hooks/useViewSettings';
+import type { ViewSettings } from '../hooks/useViewSettings';
 
 interface Props {
   settings: AppSettings;
@@ -32,64 +31,10 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
           onChange={(v) => onUpdate({ display: { ...settings.display, showToolOutputs: v } })}
         />
 
-        {/* Transcript style */}
-        <SelectRow
-          label="Transcript"
-          value={viewSettings.transcriptStyle}
-          options={[
-            { value: 'transcript', label: 'Log — labeled turns' },
-            { value: 'chat', label: 'Chat — bubbles' },
-            { value: 'document', label: 'Document — prose' },
-          ]}
-          onChange={(v) => onUpdateView('transcriptStyle', v as TranscriptStyle)}
-        />
-
-        {/* Tool call style */}
-        <SelectRow
-          label="Tool calls"
-          value={viewSettings.toolStyle}
-          options={[
-            { value: 'collapse', label: 'Collapsible (default)' },
-            { value: 'inline', label: 'Inline one-liner' },
-            { value: 'gutter', label: 'Gutter (left rail)' },
-            { value: 'card', label: 'Card' },
-          ]}
-          onChange={(v) => onUpdateView('toolStyle', v as ToolStyle)}
-        />
-
-        {/* Density */}
-        <Row label="Density">
-          <div style={{ display: 'flex', gap: 2, padding: 3, borderRadius: 8, backgroundColor: 'var(--bg-inset)' }}>
-            {(['compact', 'cozy', 'comfortable'] as Density[]).map((d) => {
-              const active = viewSettings.density === d;
-              return (
-                <button
-                  key={d}
-                  onClick={() => onUpdateView('density', d)}
-                  style={{
-                    fontSize: 11,
-                    padding: '4px 10px',
-                    borderRadius: 6,
-                    backgroundColor: active ? 'var(--bg-panel)' : 'transparent',
-                    color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                    border: active ? '1px solid var(--border-main)' : '1px solid transparent',
-                    fontWeight: active ? 600 : 400,
-                    cursor: 'pointer',
-                    fontFamily: 'inherit',
-                    boxShadow: active ? 'var(--shadow-card)' : 'none',
-                    transition: 'background 120ms',
-                  }}
-                >
-                  {d === 'compact' ? 'Tight' : d === 'cozy' ? 'Cozy' : 'Roomy'}
-                </button>
-              );
-            })}
-          </div>
-        </Row>
       </section>
 
       {/* MCP Output */}
-      <section>
+      <section style={{ borderTop: '1px solid var(--border-main)', paddingTop: 24 }}>
         <SectionTitle>MCP Output</SectionTitle>
         <p style={{ margin: '0 0 12px', fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
           Defaults applied when an agent calls{' '}
@@ -115,18 +60,37 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
             value={settings.mcp.includeToolOutputs}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, includeToolOutputs: v } })}
           />
-          <NumberInput label="Max sessions" value={settings.mcp.maxSessions} min={1} max={50}
+          <NumberInput label="Max sessions" value={settings.mcp.maxSessions} min={1}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxSessions: v } })} />
-          <NumberInput label="Max turns per session" value={settings.mcp.maxTurnsPerSession} min={1} max={20}
+          <NumberInput label="Max turns per session" value={settings.mcp.maxTurnsPerSession} min={1}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxTurnsPerSession: v } })} />
-          <NumberInput label="Max chars per field" value={settings.mcp.maxCharsPerField} min={100} max={2000}
+          <NumberInput label="Max chars per field" value={settings.mcp.maxCharsPerField} min={100}
             onChange={(v) => onUpdate({ mcp: { ...settings.mcp, maxCharsPerField: v } })} />
         </div>
       </section>
 
       {/* MCP Config */}
       <section>
+        <SectionTitle>Quick add</SectionTitle>
+        <p style={{ margin: '0 0 12px', fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+          Add the MCP server from the CLI when your agent supports it, or install the companion skill when you want the usage pattern available inside the agent.
+        </p>
+        <CodeBlock label="Claude Code (Windows)">
+{`claude mcp add agent-history -- cmd /c "npx -y @contextberg/agent-history --mcp"`}
+        </CodeBlock>
+        <CodeBlock label="Codex">
+{`codex mcp add agent-history -- npx -y @contextberg/agent-history --mcp`}
+        </CodeBlock>
+        <CodeBlock label="Skill">
+{`npx skills add contextberg/agent-history --skill agent-history-cli`}
+        </CodeBlock>
+      </section>
+
+      <section>
         <SectionTitle>MCP Config</SectionTitle>
+        <p style={{ margin: '0 0 12px', fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+          Cursor reads MCP configuration from <code style={inlineCodeStyle}>mcp.json</code>; the same JSON also works for clients that prefer direct config editing.
+        </p>
         <pre className="font-mono" style={{ margin: 0, fontSize: 11, padding: '14px', borderRadius: 10, backgroundColor: 'var(--bg-inset)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', overflowX: 'auto', whiteSpace: 'pre' }}>
 {`{
   "mcpServers": {
@@ -143,33 +107,6 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView }
         </pre>
       </section>
 
-      {/* Tone */}
-      <section>
-        <SectionTitle>Tone</SectionTitle>
-        <Row label="Accent color">
-          <div style={{ display: 'flex', gap: 6 }}>
-            {(Object.keys(ACCENT_PRESETS) as AccentName[]).map((name) => (
-              <button
-                key={name}
-                onClick={() => onUpdateView('accent', name)}
-                title={name}
-                style={{
-                  width: 18,
-                  height: 18,
-                  borderRadius: 999,
-                  backgroundColor: ACCENT_PRESETS[name].color,
-                  border: `2px solid ${viewSettings.accent === name ? 'var(--text-primary)' : 'transparent'}`,
-                  outline: viewSettings.accent === name ? `2px solid ${ACCENT_PRESETS[name].color}` : 'none',
-                  outlineOffset: 1,
-                  cursor: 'pointer',
-                  padding: 0,
-                  transition: 'border 120ms, outline 120ms',
-                }}
-              />
-            ))}
-          </div>
-        </Row>
-      </section>
     </div>
   );
 }
@@ -179,6 +116,68 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     <h2 style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-primary)' }}>
       {children}
     </h2>
+  );
+}
+
+const inlineCodeStyle: React.CSSProperties = {
+  backgroundColor: 'var(--bg-inset)',
+  padding: '1px 5px',
+  borderRadius: 4,
+  fontFamily: 'JetBrains Mono, monospace',
+  fontSize: 10.5,
+};
+
+function CodeBlock({ label, children }: { label: string; children: string }) {
+  const [copied, setCopied] = React.useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(children);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: 5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)' }}>{label}</div>
+        <button
+          type="button"
+          onClick={() => { void copy(); }}
+          style={{
+            border: '1px solid var(--border-main)',
+            borderRadius: 999,
+            backgroundColor: 'var(--bg-card)',
+            color: 'var(--text-secondary)',
+            fontSize: 10.5,
+            padding: '3px 8px',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre
+        className="font-mono"
+        style={{
+          margin: 0,
+          fontSize: 11,
+          padding: '11px 12px',
+          borderRadius: 10,
+          backgroundColor: 'var(--bg-inset)',
+          border: '1px solid var(--border-subtle)',
+          color: 'var(--text-secondary)',
+          overflowX: 'auto',
+          whiteSpace: 'pre',
+        }}
+      >
+        {children}
+      </pre>
+    </div>
   );
 }
 
@@ -219,7 +218,8 @@ function SelectRow({ label, value, options, onChange }: { label: string; value: 
   );
 }
 
-function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
+function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max?: number; onChange: (v: number) => void }) {
+  const clamp = (n: number) => Math.max(min, max !== undefined ? Math.min(max, n) : n);
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 0' }}>
       <p style={{ margin: 0, fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{label}</p>
@@ -227,8 +227,8 @@ function NumberInput({ label, value, min, max, onChange }: { label: string; valu
         type="number"
         value={value}
         min={min}
-        max={max}
-        onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value))))}
+        {...(max !== undefined ? { max } : {})}
+        onChange={(e) => onChange(clamp(Number(e.target.value)))}
         style={{
           width: 72,
           textAlign: 'center',
@@ -284,4 +284,3 @@ function Toggle({ label, description, value, onChange }: { label: string; descri
     </div>
   );
 }
-

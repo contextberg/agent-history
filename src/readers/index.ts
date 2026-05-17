@@ -10,6 +10,9 @@ export type { AgentSession, AgentTurn, AgentSource, IReader, ReaderOptions } fro
 
 export class AgentHistoryService {
   private readonly readers: IReader[];
+  private readonly cache = new Map<string, { at: number; sessions: AgentSession[] }>();
+  private readonly inFlight = new Map<string, Promise<AgentSession[]>>();
+  private readonly cacheTtlMs = 10_000;
 
   constructor(readers?: IReader[]) {
     this.readers = readers ?? [
@@ -23,15 +26,31 @@ export class AgentHistoryService {
   }
 
   async getSessions(options: ReaderOptions = {}): Promise<AgentSession[]> {
-    const results = await Promise.allSettled(
-      this.readers.map((r) => r.read(options)),
-    );
+    const key = optionsKey(options);
+    const cached = this.cache.get(key);
+    if (cached && Date.now() - cached.at < this.cacheTtlMs) return cached.sessions;
+    const running = this.inFlight.get(key);
+    if (running) return running;
 
-    const allSessions = results.flatMap((r) =>
-      r.status === 'fulfilled' ? r.value : [],
-    );
+    const task = (async () => {
+      const results = await Promise.allSettled(
+        this.readers.map((r) => r.read(options)),
+      );
 
-    return allSessions.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+      const allSessions = results.flatMap((r) =>
+        r.status === 'fulfilled' ? r.value : [],
+      );
+
+      const sessions = allSessions.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+      this.cache.set(key, { at: Date.now(), sessions });
+      return sessions;
+    })();
+    this.inFlight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      this.inFlight.delete(key);
+    }
   }
 
   async getSessionsBySource(source: AgentSource, options: ReaderOptions = {}): Promise<AgentSession[]> {
@@ -46,4 +65,13 @@ export class AgentHistoryService {
     );
     return Object.fromEntries(entries) as Record<AgentSource, boolean>;
   }
+}
+
+function optionsKey(options: ReaderOptions): string {
+  return JSON.stringify({
+    date: options.date?.toISOString() ?? null,
+    maxSessions: options.maxSessions ?? null,
+    maxTurnsPerSession: options.maxTurnsPerSession ?? null,
+    maxCharsPerField: options.maxCharsPerField ?? null,
+  });
 }

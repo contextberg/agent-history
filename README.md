@@ -43,26 +43,31 @@ Two postures dominate AI coding today.
 
 ## Quick Start
 
-There are two ways to use `agent-history`. **Dreaming requires the full install** — `npx` alone gives you the viewer only.
+One CLI, three things to know: install, set up dreaming, launch the viewer.
 
-### 1. Browse only — `npx`, no install
+### 1. Install
 
 ```bash
-npx @contextberg/agent-history
+npm install -g @contextberg/agent-history
 ```
 
-The browser opens automatically. Five readers run in parallel. Tools you don't have installed silently no-op. No commit hook, no dreaming.
+This installs the `contextberg` command (and `agent-history` as an alias — they behave identically).
 
-### 2. Full setup — viewer + dreaming on every commit
+> Just want to peek at the viewer without committing to an install? `npx @contextberg/agent-history` works for the viewer-only path. Dreaming requires the global install above so the `post-commit` git hook can find the binary.
 
-Dreaming is wired through a `post-commit` git hook that calls a globally installed binary, so this flow needs a real `npm install -g` (not `npx`) plus a one-time wizard:
+### 2. Launch the viewer
 
 ```bash
-# Step 1 — install the binaries globally so git hooks can find them
-npm install -g @contextberg/agent-history
+contextberg
+```
 
-# Step 2 — run the wizard inside the repo you want dreaming on
-cd path/to/your/repo
+Picks a free port, opens your default browser, and lists every history it can find. Five readers run in parallel; tools you don't have installed silently no-op. Stop with Ctrl+C.
+
+### 3. Turn on dreaming for a repo
+
+From inside the target repo (any subdirectory — `contextberg setup` auto-detects the git root via `git rev-parse --show-toplevel`):
+
+```bash
 contextberg setup
 ```
 
@@ -73,16 +78,24 @@ The wizard walks you through:
 3. **Model + token caps** — defaults are fine; override if you want
 4. **`post-commit` hook** — installed into `.git/hooks/post-commit` of the current repo
 
-That's it. The hook runs *after* the commit object is written — the commit itself never fails because of dreaming. The terminal does wait briefly for the LLM call to return; stderr is silenced and any error is swallowed (`|| true`), so a hiccup with your provider never breaks your `git commit` workflow. The summary lands at `.contextberg/knowledge/YYYY-MM/DD/{slug}.md` and is mirrored to `~/.agent-history/knowledge/<repo>/` for cross-repo MCP retrieval.
+### What runs after setup — no daemon to start
+
+There is **no separate background process to launch**. Setup wires `git` itself to do the work, and the viewer / MCP are run on demand:
+
+- **Dreaming** — the `post-commit` hook fires automatically on every `git commit`. It runs *after* the commit object is written, so the commit itself never fails because of dreaming. The terminal waits briefly for the LLM call to return; stderr is silenced and any error is swallowed (`|| true`) so a flaky provider never breaks your `git commit` workflow. The summary lands at `.contextberg/knowledge/YYYY-MM/DD/{slug}.md` and is mirrored to `~/.agent-history/knowledge/<repo>/` for cross-repo MCP retrieval.
+- **Viewer** — `contextberg` (or `agent-history`) launches the browser UI on demand. See step 2 above.
+- **MCP** — to expose history to another agent (Claude Desktop, etc.), add the snippet under [Using as an MCP server](#using-as-an-mcp-server) to that agent's MCP config. The MCP server is launched on demand by the client over stdio — you don't run it yourself.
 
 ### Verify it's working
 
 ```bash
-contextberg status                       # config + per-repo hook status
-contextberg test                         # one-shot prompt to confirm provider auth
+contextberg status                          # config + per-repo hook status
+contextberg test                            # one-shot prompt to confirm provider auth
 contextberg learn --commit HEAD --verbose   # rerun against HEAD without committing
-contextberg show-prompt                  # exact prompt the LLM will receive
+contextberg show-prompt                     # exact prompt the LLM will receive
 ```
+
+A successful run prints `[contextberg] Saved → .contextberg/knowledge/...` to stderr (suppressed by the hook, visible when you run `contextberg learn` directly).
 
 ### Adding dreaming to additional repos
 
@@ -105,18 +118,19 @@ contextberg show-prompt                  # exact prompt the LLM will receive
 
 ## CLI
 
-Two binaries ship with the package — viewer/MCP on one, dreaming on the other.
+One CLI for everything. `contextberg` and `agent-history` are aliases — pick whichever you like.
 
 | Command | What it does |
 |---------|--------------|
-| `agent-history` | Launch the browser UI on a free port and open it |
-| `agent-history --mcp` | Run as an MCP stdio server |
+| `contextberg` | Launch the browser UI on a free port and open it (default action) |
+| `contextberg --mcp` | Run as an MCP stdio server |
 | `contextberg setup` | Interactive wizard: provider, model, hook install |
 | `contextberg learn` | Extract knowledge from `HEAD` (or `--commit <ref>`) |
 | `contextberg status` | Show current config + per-repo hook status |
 | `contextberg test` | One-shot prompt to verify provider auth |
 | `contextberg show-prompt` | Print the full system prompt |
 | `contextberg uninstall` | Remove the `post-commit` hook from this repo |
+| `contextberg --help` | Show this command list |
 
 ---
 
@@ -125,7 +139,7 @@ Two binaries ship with the package — viewer/MCP on one, dreaming on the other.
 ```json
 {
   "mcpServers": {
-    "agent-history": {
+    "contextberg": {
       "command": "npx",
       "args": ["-y", "@contextberg/agent-history", "--mcp"]
     }
@@ -133,7 +147,7 @@ Two binaries ship with the package — viewer/MCP on one, dreaming on the other.
 }
 ```
 
-Hard caps protect downstream context windows: `maxSessions ≤ 50`, `maxTurnsPerSession ≤ 20`, `maxCharsPerField ≤ 2000`.
+Defaults: `maxSessions=10`, `maxTurnsPerSession=30`, `maxCharsPerField=100000` (≈25k tokens). All three are freely configurable per call and from the web Settings panel — there is no hard ceiling, so dial them up as your downstream context window allows. The defaults are tuned for a typical 200k-token model context; lower them on smaller models, raise them on long-context ones.
 
 ---
 
@@ -194,3 +208,4 @@ See [.claude/CLAUDE.md](.claude/CLAUDE.md) for architectural conventions.
 ## License
 
 MIT — see [LICENSE](./LICENSE). Built by [Contextberg](https://contextberg.com).
+// test 1778780248

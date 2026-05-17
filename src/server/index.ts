@@ -10,6 +10,9 @@ import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
 import { aggregateCommits } from './commits.js';
 import { readAllLinkCaches } from '../knowledge/link-cache.js';
+import { readRecentRuns } from '../knowledge/run-log.js';
+import { findCommitKnowledge } from '../knowledge/store.js';
+import { CommitWatcher, type WatcherEvent } from './commit-watcher.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.join(__dirname, 'web');
@@ -31,11 +34,62 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }
   });
 
+  // Construct the watcher up front so route handlers can close over it. We
+  // start it once (after the routes are registered) and re-seed it from the
+  // /api/settings path when the watched-repo list changes.
+  const watcher = new CommitWatcher();
+  let commitsCache: { at: number; value: { commits: Awaited<ReturnType<typeof aggregateCommits>> } } | null = null;
+  let commitsInFlight: Promise<{ commits: Awaited<ReturnType<typeof aggregateCommits>> }> | null = null;
+
+  const loadCommits = async (): Promise<{ commits: Awaited<ReturnType<typeof aggregateCommits>> }> => {
+    if (commitsCache && Date.now() - commitsCache.at < 10_000) return commitsCache.value;
+    if (commitsInFlight) return commitsInFlight;
+    commitsInFlight = (async () => {
+      // Prefer pre-computed link cache (populated by `contextberg learn` on commit).
+      // For repos not yet in the cache, fall back to live computation.
+      const caches = await readAllLinkCaches();
+
+      if (caches.length > 0) {
+        const cachedRepos = new Set(caches.map((c) => c.repo));
+        const sessions = await service.getSessions();
+        const liveCommits = await aggregateCommits(
+          sessions.filter((s) => !sessionTouchesAnyRepo(s, cachedRepos)),
+        );
+        const cachedCommits = rehydrateCachedLinks(caches.flatMap((c) => c.commits), sessions);
+        const all = [...cachedCommits, ...liveCommits];
+        all.sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+        return { commits: all };
+      }
+
+      const sessions = await service.getSessions();
+      return { commits: await aggregateCommits(sessions) };
+    })();
+    try {
+      const value = await commitsInFlight;
+      commitsCache = { at: Date.now(), value };
+      return value;
+    } finally {
+      commitsInFlight = null;
+    }
+  };
+
+  watcher.on('commit-detected', () => {
+    commitsCache = null;
+  });
+  watcher.on('learn-completed', () => {
+    commitsCache = null;
+    setTimeout(() => {
+      void loadCommits().catch(() => undefined);
+    }, 250);
+  });
+
   app.get('/api/sessions', async (req) => {
     const query = req.query as Record<string, string>;
+    const date = parseDateQuery(query['date']);
+    const maxSessions = parsePositiveInt(query['maxSessions']);
     const options: ReaderOptions = {
-      ...(query['date'] ? { date: new Date(query['date']) } : {}),
-      ...(query['maxSessions'] ? { maxSessions: Number(query['maxSessions']) } : {}),
+      ...(date ? { date } : {}),
+      ...(maxSessions ? { maxSessions } : {}),
     };
     const source = query['source'] as AgentSource | undefined;
     return source ? service.getSessionsBySource(source, options) : service.getSessions(options);
@@ -54,24 +108,7 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
   });
 
   app.get('/api/commits', async () => {
-    // Prefer pre-computed link cache (populated by `contextberg learn` on commit).
-    // For repos not yet in the cache, fall back to live computation.
-    const caches = await readAllLinkCaches();
-
-    if (caches.length > 0) {
-      const cachedRepos = new Set(caches.map((c) => c.repo));
-      const sessions = await service.getSessions({ maxSessions: 200 });
-      const liveCommits = await aggregateCommits(
-        sessions.filter((s) => !s.cwd || !cachedRepos.has(s.cwd)),
-      );
-      const cachedCommits = caches.flatMap((c) => c.commits);
-      const all = [...cachedCommits, ...liveCommits];
-      all.sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
-      return { commits: all };
-    }
-
-    const sessions = await service.getSessions({ maxSessions: 200 });
-    return { commits: await aggregateCommits(sessions) };
+    return loadCommits();
   });
 
   app.get('/api/settings', async () => {
@@ -87,11 +124,90 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
       knowledge: { ...current.knowledge, ...body.knowledge },
     };
     await saveConfig(updated);
+    // Re-seed the watcher when the watched-repo set changes — adding a fresh
+    // repo via the wizard while the viewer is already running should "just
+    // work" without needing a restart.
+    const before = current.knowledge.watchedRepos ?? [];
+    const after = updated.knowledge.watchedRepos ?? [];
+    if (!sameStringList(before, after)) {
+      watcher.stop();
+      await watcher.start();
+    }
     return updated;
   });
 
+  // Recent runs endpoint — powers the "auto-learn activity" pane in the UI
+  // and answers "did the watcher actually fire?" without grepping the log file.
+  app.get('/api/learn-runs', async (req) => {
+    const query = req.query as Record<string, string>;
+    const n = Math.min(parsePositiveInt(query['limit']) ?? 20, 100);
+    const runs = await readRecentRuns(n);
+    return { runs };
+  });
+
+  // Per-commit knowledge note (the LLM-produced summary). The CommitView
+  // pulls this when the user opens a commit, and a 404 here is the normal
+  // pre-learn state — the UI just shows an empty hint in that case.
+  app.get('/api/commit-knowledge', async (req, reply) => {
+    const query = req.query as Record<string, string>;
+    const sha = (query['sha'] ?? '').trim();
+    const repoAbs = (query['repo'] ?? '').trim();
+    if (!sha || !repoAbs) {
+      return reply.status(400).send({ error: 'sha and repo query params are required' });
+    }
+    const found = await findCommitKnowledge(repoAbs, sha);
+    if (!found) return reply.status(404).send({ error: 'No knowledge note for this commit yet.' });
+    return {
+      sha: found.entry.sha,
+      subject: found.entry.subject,
+      repoName: found.entry.repoName,
+      branch: found.entry.branch,
+      authoredAt: found.entry.authoredAt,
+      extractedAt: found.entry.extractedAt,
+      provider: found.entry.provider,
+      model: found.entry.model,
+      body: found.entry.body,
+      sessions: found.entry.sessions,
+      filesChanged: found.entry.filesChanged,
+      mdPath: found.mdPath,
+    };
+  });
+
+  // SSE feed of commit-watcher events. Clients use EventSource('/api/events').
+  // Keep-alive every 25s to defeat proxy idle timeouts; the disconnect path
+  // unsubscribes the listener so we don't leak emitter handlers.
+  app.get('/api/events', async (_req, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    const send = (ev: WatcherEvent): void => {
+      reply.raw.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
+    };
+    const unsubscribe = watcher.onAny(send);
+    const keepalive = setInterval(() => reply.raw.write(`: keepalive\n\n`), 25_000);
+    reply.raw.on('close', () => {
+      clearInterval(keepalive);
+      unsubscribe();
+    });
+  });
+
+  // Boot the watcher AFTER the routes are registered so the very first
+  // /api/events client can attach before any commit fires.
+  await watcher.start();
+
+  // Warm the by-commit view while the user is reading the default session
+  // list. This moves the expensive first aggregation off the interaction path
+  // without blocking server startup.
+  setTimeout(() => {
+    void loadCommits().catch(() => undefined);
+  }, 250);
+
   const shutdown = async (signal: NodeJS.Signals) => {
     process.stdout.write(`\n[agent-history] ${signal} received, releasing port...\n`);
+    watcher.stop();
     try { await app.close(); } catch { /* ignore */ }
     process.exit(0);
   };
@@ -120,6 +236,79 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     console.log(`agent-history running at ${url}`);
     await open(url);
   }
+}
+
+function sameStringList(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+  return true;
+}
+
+function parseDateQuery(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+function sessionTouchesAnyRepo(
+  session: Awaited<ReturnType<AgentHistoryService['getSessions']>>[number],
+  repos: Set<string>,
+): boolean {
+  const candidatePaths: string[] = [];
+  if (session.cwd) candidatePaths.push(session.cwd);
+  candidatePaths.push(...(session.additionalCwds ?? []));
+  for (const turn of session.turns) {
+    for (const file of turn.touchedFiles ?? []) {
+      if (path.isAbsolute(file)) candidatePaths.push(file);
+    }
+  }
+  return candidatePaths.some((candidate) =>
+    [...repos].some((repo) => isInside(path.resolve(candidate), repo)),
+  );
+}
+
+function isInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function rehydrateCachedLinks(
+  commits: Awaited<ReturnType<typeof aggregateCommits>>,
+  sessions: Awaited<ReturnType<AgentHistoryService['getSessions']>>,
+): Awaited<ReturnType<typeof aggregateCommits>> {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const byFingerprint = new Map(
+    sessions.map((s) => [`${s.source}\u0000${s.project}\u0000${s.startedAt.toISOString()}`, s]),
+  );
+  return commits.map((commit) => ({
+    ...commit,
+    links: commit.links.map((link) => {
+      const exact = byId.get(link.session.id);
+      const fallback = byFingerprint.get(
+        `${link.session.source}\u0000${link.session.project}\u0000${link.session.startedAt}`,
+      );
+      const session = exact ?? fallback;
+      if (!session) return link;
+      return {
+        ...link,
+        session: {
+          id: session.id,
+          project: session.project,
+          source: session.source,
+          startedAt: session.startedAt.toISOString(),
+          ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+        },
+      };
+    }),
+  }));
 }
 
 async function listenWithFallback(

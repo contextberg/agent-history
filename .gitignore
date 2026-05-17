@@ -2,7 +2,14 @@ node_modules
 dist
 .env
 *.local
+*.log
 .claude/to-do/
+.claude/*.lock
 .playwright-mcp
 reference/
 .contextberg/
+demo/
+
+# Local planning notes; useful during development, not part of the OSS surface.
+docs/next-actions.md
+docs/remaining-test-tasks.md

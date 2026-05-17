@@ -67,16 +67,18 @@ export async function readCommits(
 
 /**
  * Parse `git log -z --name-only --pretty=format:...%x01...` output.
- * With -z, commits and file lists are separated by NUL. The format string
- * uses \x01 between commit fields. After the format line for a commit comes
- * a newline, then the file list (each path on its own line), then a NUL.
+ *
+ * With `-z --name-only`, git emits per-commit records as
+ *   `<header>\n<file>\0<file>\0...<file>\0`
+ * and separates records with an additional NUL — i.e. consecutive records are
+ * delimited by `\0\0`. So we split on `\0\0` for record boundaries and on
+ * single `\0` inside each record to recover the file list. (The earlier
+ * single-NUL split silently dropped every file beyond the first.)
  */
 function parseGitLogZ(stdout: string, repo: string): GitCommit[] {
   if (!stdout) return [];
   const commits: GitCommit[] = [];
-  // -z separates *records*, but when --name-only is on, each commit's payload
-  // is "<header>\n<file>\n<file>\n..." and records are separated by NUL.
-  for (const block of stdout.split('\u0000')) {
+  for (const block of stdout.split('\u0000\u0000')) {
     if (!block.trim()) continue;
     const newlineIdx = block.indexOf('\n');
     const header = newlineIdx === -1 ? block : block.slice(0, newlineIdx);
@@ -87,7 +89,7 @@ function parseGitLogZ(stdout: string, repo: string): GitCommit[] {
     const time = new Date(iso);
     if (isNaN(time.getTime())) continue;
     const files = fileBlock
-      .split('\n')
+      .split('\u0000')
       .map((f) => f.trim())
       .filter(Boolean)
       .map((f) => path.resolve(repo, f));

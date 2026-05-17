@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentSession, AgentSource, CommitWithLinks } from './types';
-import { fetchCommits, fetchSessions, fetchStatus } from './api';
+import { fetchCommits, fetchSessions, fetchSessionsProgressively, fetchStatus } from './api';
 import { SessionList } from './components/SessionList';
 import { SessionView } from './components/SessionView';
 import { SourceFilter } from './components/SourceFilter';
@@ -49,9 +49,10 @@ export function App() {
   const [commitsLoading, setCommitsLoading] = useState(false);
   const [groupMode, setGroupMode] = useState<GroupMode>('time');
   const [selected, setSelected] = useState<Selection>(null);
-  const [source, setSource] = useState<AgentSource | undefined>(undefined);
+  const [sources, setSources] = useState<Set<AgentSource>>(() => new Set());
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [status, setStatus] = useState<Record<AgentSource, boolean> | undefined>(undefined);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('sessions');
   const selectedSession = selected?.kind === 'session' ? selected.session : null;
@@ -99,17 +100,32 @@ export function App() {
 
     const refresh = (showSpinner: boolean) => {
       if (showSpinner) setLoading(true);
-      Promise.all([fetchSessions(source), fetchStatus().catch(() => undefined)])
+      // Progressive rendering is only safe during the first load, when there
+      // is no user selection to preserve yet. During background refreshes a
+      // partial source set would briefly omit the currently-open session and
+      // make the selection jump to another row.
+      const sessionsPromise = !showSpinner
+        ? fetchSessions()
+        : fetchSessionsProgressively((data) => {
+            if (cancelled) return;
+            setSessions(data);
+            setSelected((cur) => reconcileSelection(cur, data));
+            if (data.length > 0) setLoading(false);
+          });
+      Promise.all([sessionsPromise, fetchStatus().catch(() => undefined)])
         .then(([data, stat]) => {
           if (cancelled) return;
           setSessions(data);
           setStatus(stat);
-          setSelected((cur) => {
-            if (cur) return cur;
-            return data.length > 0 ? { kind: 'session', session: data[0]! } : null;
-          });
+          setSessionsError(null);
+          setSelected((cur) => reconcileSelection(cur, data));
         })
-        .catch((err) => console.error('Failed to fetch sessions:', err))
+        .catch((err) => {
+          console.error('Failed to fetch sessions:', err);
+          if (!cancelled) {
+            setSessionsError(err instanceof Error ? err.message : String(err));
+          }
+        })
         .finally(() => { if (!cancelled && showSpinner) setLoading(false); });
     };
 
@@ -126,7 +142,7 @@ export function App() {
       document.removeEventListener('visibilitychange', onVisible);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source]);
+  }, []);
 
   const [commitsError, setCommitsError] = useState<string | null>(null);
 
@@ -144,6 +160,11 @@ export function App() {
           if (cancelled) return;
           setCommits(data);
           setCommitsError(null);
+          setSelected((cur) => {
+            if (cur?.kind !== 'commit') return cur;
+            const fresh = data.find((c) => c.sha === cur.commit.sha && c.repo === cur.commit.repo);
+            return fresh ? { kind: 'commit', commit: fresh } : cur;
+          });
         })
         .catch((err) => {
           console.error('Failed to fetch commits:', err);
@@ -157,21 +178,33 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupMode]);
 
-  const filteredSessions = useMemo(
-    () => (query.trim() ? searchSessions(sessions, query) : sessions),
-    [sessions, query],
-  );
+  const filteredSessions = useMemo(() => {
+    const bySource = sources.size > 0
+      ? sessions.filter((s) => sources.has(s.source))
+      : sessions;
+    return query.trim() ? searchSessions(bySource, query) : bySource;
+  }, [sessions, sources, query]);
 
   // Apply the source filter to commit data too — when the user picks "cursor"
   // they want commits where cursor contributed, with non-cursor links hidden
   // inside each row. We map then filter so the strong/weak counts in
   // CommitList and the link groups in CommitView all see consistent data.
   const filteredCommits = useMemo(() => {
-    if (!source) return commits;
+    if (sources.size === 0) return commits;
     return commits
-      .map((c) => ({ ...c, links: c.links.filter((l) => l.session.source === source) }))
+      .map((c) => ({ ...c, links: c.links.filter((l) => sources.has(l.session.source)) }))
       .filter((c) => c.links.length > 0);
-  }, [commits, source]);
+  }, [commits, sources]);
+
+  useEffect(() => {
+    if (groupMode !== 'commit' || selected?.kind !== 'commit') return;
+    const stillVisible = filteredCommits.some(
+      (c) => c.sha === selected.commit.sha && c.repo === selected.commit.repo,
+    );
+    if (!stillVisible) {
+      setSelected(filteredCommits[0] ? { kind: 'commit', commit: filteredCommits[0] } : null);
+    }
+  }, [filteredCommits, groupMode, selected]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -390,7 +423,7 @@ export function App() {
           {sidebarTab === 'sessions' && (
             <>
               <div className="mt-2.5">
-                <SourceFilter value={source} onChange={setSource} />
+                <SourceFilter value={sources} onChange={setSources} />
               </div>
               <div
                 className="mt-2.5 flex gap-0.5 p-[3px] rounded-lg"
@@ -428,6 +461,10 @@ export function App() {
                   className="w-4 h-4 rounded-full border-2 animate-spin"
                   style={{ borderColor: 'var(--border-main)', borderTopColor: 'var(--accent)' }}
                 />
+              </div>
+            ) : sessionsError ? (
+              <div style={{ padding: '24px 16px', color: 'var(--text-tertiary)', fontSize: 12, lineHeight: 1.6 }}>
+                Failed to load sessions: {sessionsError}
               </div>
             ) : groupMode === 'commit' ? (
               commitsError ? (
@@ -538,4 +575,17 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function reconcileSelection(cur: Selection, data: AgentSession[]): Selection {
+  if (cur?.kind === 'session') {
+    const fresh = data.find((s) => s.id === cur.session.id);
+    return fresh
+      ? { kind: 'session', session: fresh }
+      : data.length > 0
+        ? { kind: 'session', session: data[0]! }
+        : null;
+  }
+  if (cur?.kind === 'commit') return cur;
+  return data.length > 0 ? { kind: 'session', session: data[0]! } : null;
 }

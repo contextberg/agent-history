@@ -1,7 +1,9 @@
 import React from 'react';
-import type { AgentSession, CommitLink, CommitWithLinks } from '../types';
+import type { AgentSession, CommitKnowledge, CommitLink, CommitWithLinks } from '../types';
 import { sourceLabel, sourceHex } from '../utils/source';
 import { SourceIcon } from './SourceIcon';
+import { fetchCommitKnowledge, fetchSession } from '../api';
+import { renderKnowledgeMarkdown } from '../utils/markdown';
 
 interface Props {
   commit: CommitWithLinks;
@@ -59,6 +61,36 @@ export function CommitView({ commit, sessions, onSelectSession }: Props) {
     return { strong, weak };
   }, [commit.links]);
 
+  // Knowledge note for this commit (the markdown body produced by `runLearn`).
+  // We refetch on commit change AND when the SSE feed reports a learn-completed
+  // event for this exact sha — that's how the in-process watcher finishing a
+  // background extraction propagates to the UI without a manual reload.
+  const [knowledge, setKnowledge] = React.useState<CommitKnowledge | null>(null);
+  const [knowledgeLoading, setKnowledgeLoading] = React.useState(false);
+  const [refetchTick, setRefetchTick] = React.useState(0);
+  React.useEffect(() => {
+    let cancelled = false;
+    setKnowledgeLoading(true);
+    fetchCommitKnowledge(commit.repo, commit.sha)
+      .then((data) => { if (!cancelled) setKnowledge(data); })
+      .catch(() => { if (!cancelled) setKnowledge(null); })
+      .finally(() => { if (!cancelled) setKnowledgeLoading(false); });
+    return () => { cancelled = true; };
+  }, [commit.repo, commit.sha, refetchTick]);
+
+  React.useEffect(() => {
+    const es = new EventSource('/api/events');
+    es.addEventListener('learn-completed', (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as { repo?: string; result?: { sha?: string; status?: string } };
+        if (payload.result?.sha === commit.sha && payload.result?.status === 'ok') {
+          setRefetchTick((t) => t + 1);
+        }
+      } catch { /* ignore */ }
+    });
+    return () => es.close();
+  }, [commit.sha]);
+
   return (
     <div
       className="overflow-y-auto"
@@ -111,6 +143,33 @@ export function CommitView({ commit, sessions, onSelectSession }: Props) {
           </span>
         </div>
       </header>
+
+      {/* Knowledge note (the LLM-produced summary) */}
+      <Section title="Knowledge">
+        {knowledgeLoading && !knowledge ? (
+          <p style={emptyHintStyle}>Loading…</p>
+        ) : knowledge ? (
+          <div>
+            <div style={knowledgeMetaStyle}>
+              <span>{knowledge.provider} / {knowledge.model}</span>
+              <span style={{ color: 'var(--text-quaternary)' }}>·</span>
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                extracted {fmtTime(knowledge.extractedAt)}
+              </span>
+              <span style={{ color: 'var(--text-quaternary)' }}>·</span>
+              <span>{knowledge.sessions.length} session{knowledge.sessions.length === 1 ? '' : 's'}</span>
+            </div>
+            <div style={knowledgeBodyStyle}>
+              {renderKnowledgeMarkdown(knowledge.body)}
+            </div>
+          </div>
+        ) : (
+          <p style={emptyHintStyle}>
+            No knowledge note yet. Background extraction will run on the next commit
+            in this repo, or run <code style={inlineCodeStyle}>contextberg learn --commit {commit.sha.slice(0, 7)}</code> to backfill.
+          </p>
+        )}
+      </Section>
 
       {/* Linked sessions */}
       <Section title={`Linked sessions (${commit.links.length})`}>
@@ -170,6 +229,39 @@ export function CommitView({ commit, sessions, onSelectSession }: Props) {
   );
 }
 
+const emptyHintStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 12,
+  color: 'var(--text-tertiary)',
+  lineHeight: 1.55,
+};
+
+const inlineCodeStyle: React.CSSProperties = {
+  fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+  fontSize: 11.5,
+  padding: '1px 5px',
+  borderRadius: 4,
+  backgroundColor: 'var(--bg-inset)',
+  color: 'var(--text-primary)',
+};
+
+const knowledgeMetaStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  alignItems: 'center',
+  marginBottom: 12,
+  fontSize: 11,
+  color: 'var(--text-tertiary)',
+};
+
+const knowledgeBodyStyle: React.CSSProperties = {
+  padding: '14px 18px',
+  borderRadius: 10,
+  border: '1px solid var(--border-main)',
+  backgroundColor: 'var(--bg-card)',
+};
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section style={{ marginBottom: 28 }}>
@@ -226,7 +318,17 @@ function LinkGroup({
             <LinkRow
               key={l.session.id}
               link={l}
-              onSelect={full ? () => onSelect(full) : undefined}
+              onSelect={async () => {
+                if (full) {
+                  onSelect(full);
+                  return;
+                }
+                try {
+                  onSelect(await fetchSession(l.session.id));
+                } catch (err) {
+                  console.error('Failed to fetch linked session:', err);
+                }
+              }}
             />
           );
         })}
@@ -240,7 +342,7 @@ function LinkRow({
   onSelect,
 }: {
   link: CommitLink;
-  onSelect: (() => void) | undefined;
+  onSelect: () => void | Promise<void>;
 }) {
   const score = link.score;
   const accent = score >= STRONG_THRESHOLD;
@@ -249,7 +351,6 @@ function LinkRow({
     <li>
       <button
         onClick={onSelect}
-        disabled={!onSelect}
         className="focus-ring"
         style={{
           width: '100%',
