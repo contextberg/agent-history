@@ -38,16 +38,21 @@ export function useSettings() {
   }, []);
 
   async function update(patch: Partial<AppSettings>) {
+    const previous = settings;
     const next: AppSettings = {
       display: { ...settings.display, ...patch.display },
       mcp: { ...settings.mcp, ...patch.mcp },
     };
     setSettings(next);
-    await fetch('/api/settings', {
+    const res = await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(next),
-    }).catch(() => {});
+    }).catch(() => null);
+    if (!res?.ok) {
+      console.error('Failed to save settings');
+      setSettings(previous);
+    }
   }
 
   return { settings, update, loading };

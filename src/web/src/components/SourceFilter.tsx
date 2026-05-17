@@ -12,21 +12,27 @@ const SOURCES: { value: AgentSource; label: string }[] = [
 ];
 
 interface Props {
-  value: AgentSource | undefined;
-  onChange: (v: AgentSource | undefined) => void;
+  value: Set<AgentSource>;
+  onChange: (v: Set<AgentSource>) => void;
 }
 
 export function SourceFilter({ value, onChange }: Props) {
+  const toggle = (source: AgentSource) => {
+    const next = new Set(value);
+    if (next.has(source)) next.delete(source);
+    else next.add(source);
+    onChange(next);
+  };
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-      <FilterPill active={!value} onClick={() => onChange(undefined)} source={undefined}>
+      <FilterPill active={value.size === 0} onClick={() => onChange(new Set())} source={undefined}>
         All
       </FilterPill>
       {SOURCES.map((s) => (
         <FilterPill
           key={s.value}
-          active={value === s.value}
-          onClick={() => onChange(s.value)}
+          active={value.has(s.value)}
+          onClick={() => toggle(s.value)}
           source={s.value}
         >
           {s.label}
@@ -59,9 +65,11 @@ function FilterPill({
         fontWeight: 500,
         padding: '3px 8px',
         borderRadius: 999,
-        backgroundColor: active ? 'var(--bg-card-selected)' : 'transparent',
-        color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
-        border: `1px solid ${active ? 'var(--border-main)' : 'transparent'}`,
+        backgroundColor: active ? 'var(--accent-soft)' : 'transparent',
+        color: active ? 'var(--text-primary)' : 'var(--source-filter-text, var(--text-tertiary))',
+        border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`,
+        boxShadow: active ? 'inset 0 0 0 1px var(--accent-soft)' : 'none',
+        fontWeight: active ? 700 : 500,
         cursor: 'pointer',
         fontFamily: 'inherit',
         transition: 'background 90ms, color 90ms',

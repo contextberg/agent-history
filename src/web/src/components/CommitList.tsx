@@ -91,26 +91,57 @@ function RepoSection({
   selectedSha: string | undefined;
   onSelect: (commit: CommitWithLinks) => void;
 }) {
+  const [collapsed, setCollapsed] = React.useState(false);
+
   return (
     <section>
       {/* Sticky repo header — stays anchored at the top of the scroll viewport
           while you read through this repo's commits, so you always know which
           repo you're in even after scrolling several screens. */}
-      <header
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
         style={{
           position: 'sticky',
           top: 0,
           zIndex: 5,
+          width: '100%',
           backgroundColor: 'var(--bg-panel)',
           padding: firstSection ? '12px 14px 8px' : '14px 14px 8px',
           marginTop: firstSection ? 0 : 4,
           borderTop: firstSection ? 'none' : '1px solid var(--border-main)',
+          borderRight: 'none',
+          borderBottom: 'none',
+          borderLeft: 'none',
           display: 'flex',
           alignItems: 'center',
           gap: 8,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          textAlign: 'left',
         }}
         title={repo}
       >
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{
+            color: 'var(--text-tertiary)',
+            flexShrink: 0,
+            transform: collapsed ? 'none' : 'rotate(90deg)',
+            transition: 'transform 120ms',
+          }}
+          aria-hidden
+        >
+          <path d="m9 18 6-6-6-6" />
+        </svg>
         <svg
           width="13"
           height="13"
@@ -155,26 +186,28 @@ function RepoSection({
         >
           {commits.length} {commits.length === 1 ? 'commit' : 'commits'}
         </span>
-      </header>
-      <ul
-        style={{
-          listStyle: 'none',
-          padding: '0 8px 8px',
-          margin: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 1,
-        }}
-      >
-        {commits.map((c) => (
-          <CommitRow
-            key={c.sha}
-            c={c}
-            active={selectedSha === c.sha}
-            onSelect={() => onSelect(c)}
-          />
-        ))}
-      </ul>
+      </button>
+      {!collapsed && (
+        <ul
+          style={{
+            listStyle: 'none',
+            padding: '0 8px 8px',
+            margin: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1,
+          }}
+        >
+          {commits.map((c) => (
+            <CommitRow
+              key={c.sha}
+              c={c}
+              active={selectedSha === c.sha}
+              onSelect={() => onSelect(c)}
+            />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
