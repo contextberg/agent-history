@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { CONFIG_DIR } from '../config.js';
 
 export const EXTRACTION_VERSION = 1;
@@ -38,6 +39,10 @@ export interface StoreResult {
   globalMdPath: string;
   globalJsonPath: string;
   changelogPath: string | null;
+}
+
+function repoStorageKey(repoPath: string): string {
+  return createHash('sha1').update(path.resolve(repoPath)).digest('hex').slice(0, 12);
 }
 
 interface DateParts {
@@ -243,8 +248,10 @@ export async function storeKnowledge(
     return { md: mdPath, json: jsonPath, changelog: changelogPath };
   };
 
-  // Global mirror (cross-repo MCP source).
-  const globalRoot = path.join(CONFIG_DIR, 'knowledge', entry.repoName);
+  // Global mirror (cross-repo MCP source). Namespace by basename + stable path
+  // hash so two unrelated repos named "app" don't trample each other's files.
+  // MCP scanning is recursive, so the extra level is transparent to readers.
+  const globalRoot = path.join(CONFIG_DIR, 'knowledge', entry.repoName, repoStorageKey(entry.repo));
   const globalBundle = await writeBundle(globalRoot);
 
   // Local mirror (lives next to the repo, gets committed by the user).
@@ -278,67 +285,63 @@ export function globalKnowledgeDir(): string {
  *
  * The global mirror is always written by `storeKnowledge`, even when a local
  * (repo-relative) mirror is also written, so this is the canonical source.
- * We walk `<root>/<repoName>/YYYY-MM/DD/.data/*.json` and return the first
- * entry whose `sha` matches.
+ * We walk every nested `.data/*.json` entry below `<root>/<repoName>` and
+ * return the first entry whose
+ * absolute repo path and `sha` both match. The recursive walk keeps older
+ * basename-only layouts readable while supporting hashed repo namespaces for
+ * same-name repos.
  *
  * Returns null when no note has been extracted for this commit yet — that's
  * the normal pre-learn state, not an error.
  */
 export async function findCommitKnowledge(
-  repoName: string,
+  repoAbs: string,
   sha: string,
 ): Promise<{ entry: KnowledgeEntry; mdPath: string; jsonPath: string } | null> {
-  if (!repoName || !sha) return null;
+  if (!repoAbs || !sha) return null;
+  const repoName = path.basename(repoAbs);
+  const normalizedRepo = path.resolve(repoAbs);
   const root = path.join(globalKnowledgeDir(), repoName);
 
-  let monthDirs: import('node:fs').Dirent[];
-  try {
-    monthDirs = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-
-  for (const m of monthDirs) {
-    if (!m.isDirectory()) continue;
-    const monthPath = path.join(root, m.name);
-    let dayDirs: import('node:fs').Dirent[];
+  const jsonFiles = await listJsonFilesUnder(root);
+  for (const jsonPath of jsonFiles) {
+    let raw: string;
     try {
-      dayDirs = await fs.readdir(monthPath, { withFileTypes: true });
+      raw = await fs.readFile(jsonPath, 'utf-8');
     } catch {
       continue;
     }
-    for (const d of dayDirs) {
-      if (!d.isDirectory()) continue;
-      const dataDir = path.join(monthPath, d.name, '.data');
-      let jsonFiles: string[];
-      try {
-        jsonFiles = await fs.readdir(dataDir);
-      } catch {
-        continue;
-      }
-      for (const f of jsonFiles) {
-        if (!f.endsWith('.json')) continue;
-        const jsonPath = path.join(dataDir, f);
-        let raw: string;
-        try {
-          raw = await fs.readFile(jsonPath, 'utf-8');
-        } catch {
-          continue;
-        }
-        let entry: KnowledgeEntry;
-        try {
-          entry = JSON.parse(raw) as KnowledgeEntry;
-        } catch {
-          continue;
-        }
-        if (entry.sha === sha) {
-          const baseName = f.replace(/\.json$/, '');
-          const mdPath = path.join(monthPath, d.name, `${baseName}.md`);
-          return { entry, mdPath, jsonPath };
-        }
-      }
+    let entry: KnowledgeEntry;
+    try {
+      entry = JSON.parse(raw) as KnowledgeEntry;
+    } catch {
+      continue;
+    }
+    if (entry.sha === sha && path.resolve(entry.repo) === normalizedRepo) {
+      const baseName = path.basename(jsonPath, '.json');
+      const mdPath = path.join(path.dirname(path.dirname(jsonPath)), `${baseName}.md`);
+      return { entry, mdPath, jsonPath };
     }
   }
 
   return null;
+}
+
+async function listJsonFilesUnder(dir: string): Promise<string[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...(await listJsonFilesUnder(full)));
+    } else if (entry.isFile() && entry.name.endsWith('.json')) {
+      out.push(full);
+    }
+  }
+  return out;
 }

@@ -2,7 +2,7 @@ import React from 'react';
 import type { AgentSession, CommitKnowledge, CommitLink, CommitWithLinks } from '../types';
 import { sourceLabel, sourceHex } from '../utils/source';
 import { SourceIcon } from './SourceIcon';
-import { fetchCommitKnowledge } from '../api';
+import { fetchCommitKnowledge, fetchSession } from '../api';
 import { renderKnowledgeMarkdown } from '../utils/markdown';
 
 interface Props {
@@ -318,7 +318,17 @@ function LinkGroup({
             <LinkRow
               key={l.session.id}
               link={l}
-              onSelect={full ? () => onSelect(full) : undefined}
+              onSelect={async () => {
+                if (full) {
+                  onSelect(full);
+                  return;
+                }
+                try {
+                  onSelect(await fetchSession(l.session.id));
+                } catch (err) {
+                  console.error('Failed to fetch linked session:', err);
+                }
+              }}
             />
           );
         })}
@@ -332,7 +342,7 @@ function LinkRow({
   onSelect,
 }: {
   link: CommitLink;
-  onSelect: (() => void) | undefined;
+  onSelect: () => void | Promise<void>;
 }) {
   const score = link.score;
   const accent = score >= STRONG_THRESHOLD;
@@ -341,7 +351,6 @@ function LinkRow({
     <li>
       <button
         onClick={onSelect}
-        disabled={!onSelect}
         className="focus-ring"
         style={{
           width: '100%',

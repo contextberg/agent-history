@@ -8,9 +8,31 @@ export async function fetchSessions(source?: AgentSource): Promise<AgentSession[
   return res.json();
 }
 
+export async function fetchSessionsProgressively(
+  onChunk: (sessions: AgentSession[]) => void,
+): Promise<AgentSession[]> {
+  const sources: AgentSource[] = ['claude-code', 'cursor', 'openclaw', 'codex', 'hermes', 'copilot'];
+  const collected: AgentSession[] = [];
+  await Promise.all(
+    sources.map(async (source) => {
+      const chunk = await fetchSessions(source);
+      collected.push(...chunk);
+      collected.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+      onChunk([...collected]);
+    }),
+  );
+  return collected;
+}
+
 export async function fetchStatus(): Promise<Record<AgentSource, boolean>> {
   const res = await fetch('/api/status');
   if (!res.ok) throw new Error('Failed to fetch status');
+  return res.json();
+}
+
+export async function fetchSession(id: string): Promise<AgentSession> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`Failed to fetch session (${res.status})`);
   return res.json();
 }
 
