@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
-import { truncate, isWithinDate, selectTurns } from './utils.js';
+import { truncate, isWithinDate, selectTurns, fileUriToPath } from './utils.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 
@@ -153,14 +153,6 @@ async function loadComposerToCwd(
     } finally { wdb.close(); }
   }
   return out;
-}
-
-function fileUriToPath(uri: string): string | null {
-  if (!uri.startsWith('file://')) return null;
-  let p = decodeURIComponent(uri.slice('file://'.length));
-  // file:///c:/... → starts with '/c:/' on Windows; strip leading '/'
-  if (process.platform === 'win32' && /^\/[a-z]:/i.test(p)) p = p.slice(1);
-  return path.normalize(p);
 }
 
 function workspaceStorageRoot(): string {

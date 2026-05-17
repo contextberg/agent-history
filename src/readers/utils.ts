@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AgentTurn } from './types.js';
 
 export function truncate(s: string, maxLen: number): string {
@@ -51,4 +53,13 @@ export function selectTurns(turns: AgentTurn[], maxTurns: number): AgentTurn[] {
   }
 
   return selected;
+}
+
+export function fileUriToPath(uri: string): string | null {
+  if (!uri.startsWith('file://')) return null;
+  try {
+    return path.normalize(fileURLToPath(uri));
+  } catch {
+    return null;
+  }
 }

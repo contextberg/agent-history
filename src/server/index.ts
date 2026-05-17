@@ -247,35 +247,6 @@ function readApiPortEnv(): number | undefined {
   return Number.isInteger(port) && port > 0 ? port : undefined;
 }
 
-function getCommitScanSessions(): Promise<Awaited<ReturnType<AgentHistoryService['getSessions']>>> {
-  return service.getSessions({
-    maxSessions: COMMIT_SESSION_SCAN_LIMIT,
-    maxTurnsPerSession: 100,
-    maxCharsPerField: 100_000,
-  });
-}
-
-async function ensureCurrentRepoTargeted(): Promise<void> {
-  try {
-    const repoRoot = await findGitRoot(process.cwd());
-    if (!repoRoot) return;
-    const config = await loadConfig();
-    const watched = config.knowledge.watchedRepos ?? [];
-    const ignored = config.knowledge.ignoredRepos ?? [];
-    if (ignored.some((repo) => samePath(repo, repoRoot))) return;
-    if (watched.some((repo) => samePath(repo, repoRoot))) return;
-    config.knowledge.watchedRepos = [...watched, repoRoot];
-    await saveConfig(config);
-  } catch {
-    // The viewer can be opened outside a git repo; in that case there is no
-    // current repo to add as a default memory target.
-  }
-}
-
-function samePath(a: string, b: string): boolean {
-  return path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
-}
-
 function sameStringList(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sa = [...a].sort();
@@ -367,4 +338,3 @@ async function listenWithFallback(
   }
   throw new Error(`No available port found in range ${startPort}-${startPort + maxRetries - 1}`);
 }
-

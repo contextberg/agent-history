@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { AgentSession, AgentTurn, AssistantItem, IReader, ReaderOptions } from './types.js';
-import { truncate, isWithinDate, selectTurns } from './utils.js';
+import { truncate, isWithinDate, selectTurns, fileUriToPath } from './utils.js';
 
 const DEFAULTS = { maxSessions: 50, maxTurns: 20, maxChars: 2000 };
 
@@ -121,17 +121,17 @@ export class CopilotReader implements IReader {
 
 function vscodeUserDirs(): string[] {
   const home = os.homedir();
+  const appNames = ['Code', 'Code - Insiders', 'VSCodium', 'Cursor'];
   const dirs: string[] = [];
   if (process.platform === 'win32') {
     const appdata = process.env['APPDATA'] ?? path.join(home, 'AppData', 'Roaming');
-    dirs.push(path.join(appdata, 'Code', 'User'));
-    dirs.push(path.join(appdata, 'Code - Insiders', 'User'));
+    for (const appName of appNames) dirs.push(path.join(appdata, appName, 'User'));
   } else if (process.platform === 'darwin') {
-    dirs.push(path.join(home, 'Library', 'Application Support', 'Code', 'User'));
-    dirs.push(path.join(home, 'Library', 'Application Support', 'Code - Insiders', 'User'));
+    for (const appName of appNames) {
+      dirs.push(path.join(home, 'Library', 'Application Support', appName, 'User'));
+    }
   } else {
-    dirs.push(path.join(home, '.config', 'Code', 'User'));
-    dirs.push(path.join(home, '.config', 'Code - Insiders', 'User'));
+    for (const appName of appNames) dirs.push(path.join(home, '.config', appName, 'User'));
   }
   return dirs;
 }
@@ -155,17 +155,6 @@ async function readWorkspace(wsDir: string): Promise<{ name: string; cwd: string
     }
   } catch { /* ignore */ }
   return { name: path.basename(wsDir), cwd: null };
-}
-
-/**
- * Convert a `file://` URI to a platform-absolute path. Handles Windows drive
- * encoding (`file:///c%3A/...` → `C:\...`).
- */
-function fileUriToPath(uri: string): string | null {
-  if (!uri.startsWith('file://')) return null;
-  let p = decodeURIComponent(uri.slice('file://'.length));
-  if (process.platform === 'win32' && /^\/[a-z]:/i.test(p)) p = p.slice(1);
-  return path.normalize(p);
 }
 
 async function loadJsonlSession(filePath: string): Promise<CopilotState | null> {

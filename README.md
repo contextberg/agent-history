@@ -10,7 +10,7 @@
 
 Claude Code keeps its history. Cursor keeps its own. Codex too. None of them read each other's.
 
-`agent-history` reads all five — Claude Code, Cursor, Codex, OpenClaw, Hermes — into one searchable view. And on every `git commit`, it picks the cross-agent reasoning behind that change, distills it into a per-commit note in your repo, and serves it back over MCP.
+`agent-history` reads Claude Code, Cursor, Codex, OpenClaw, Hermes, and GitHub Copilot into one searchable view. And on every `git commit`, it picks the cross-agent reasoning behind that change, distills it into a per-commit note in your repo, and serves it back over MCP.
 
 We call this **dreaming**: autonomous, cross-session, cross-agent consolidation while you keep coding. The bridge between vibe coding and context engineering — handled for you.
 
@@ -19,12 +19,12 @@ We call this **dreaming**: autonomous, cross-session, cross-agent consolidation 
 ---
 
 <table>
-<tr><td><b>One UI, every agent</b></td><td>Claude Code, Cursor, Codex, OpenClaw, Hermes in a single searchable view. Source filter, tool-call expansion, conversation timeline.</td></tr>
+<tr><td><b>One UI, every agent</b></td><td>Claude Code, Cursor, Codex, OpenClaw, Hermes, and GitHub Copilot in a single searchable view. Source filter, tool-call expansion, conversation timeline.</td></tr>
 <tr><td><b>Cross-agent dreaming</b></td><td>A managed <code>post-commit</code> hook scans every agent's history, picks the turns relevant to the changed files, and writes a per-commit knowledge note. Durable, version-controlled, agent-readable.</td></tr>
 <tr><td><b>MCP-native replay</b></td><td>Raw history is exposed as the <code>get_agent_history</code> MCP tool. Any MCP-aware agent inherits the context — no copy-paste, no prompt scaffolding.</td></tr>
 <tr><td><b>Bring your own LLM</b></td><td>Six providers out of the box: OpenAI, Anthropic, Google (Gemini), OpenRouter, Codex (ChatGPT subscription via OAuth), OpenCode Go. Switch with one command.</td></tr>
 <tr><td><b>Local-first</b></td><td>Logs, summaries, and API keys live under <code>~/.agent-history/</code> (owner-only mode). Nothing leaves your machine unless you point it at a hosted LLM.</td></tr>
-<tr><td><b>~50 LOC to add an agent</b></td><td>Implement one <code>IReader</code>, register it in three places, ship a PR. GitHub Copilot reader is the obvious next contribution.</td></tr>
+<tr><td><b>~50 LOC to add an agent</b></td><td>Implement one <code>IReader</code>, register it in three places, ship a PR.</td></tr>
 </table>
 
 ---
@@ -43,7 +43,7 @@ Two postures dominate AI coding today.
 
 ## Quick Start
 
-One CLI, three things to know: install, set up dreaming, launch the viewer.
+One CLI, three things to know: install, set up dreaming, launch the viewer. macOS, Linux, and Windows are supported; on macOS the readers look under `~/Library/Application Support/` for VS Code, Cursor, and compatible app data.
 
 ### 1. Install
 
@@ -61,7 +61,7 @@ This installs the `contextberg` command (and `agent-history` as an alias — the
 contextberg
 ```
 
-Picks a free port, opens your default browser, and lists every history it can find. Five readers run in parallel; tools you don't have installed silently no-op. Stop with Ctrl+C.
+Picks a free port, opens your default browser, and lists every history it can find. Readers run in parallel; tools you don't have installed silently no-op. Stop with Ctrl+C.
 
 ### 3. Turn on dreaming for a repo
 
@@ -108,11 +108,11 @@ A successful run prints `[contextberg] Saved → .contextberg/knowledge/...` to 
 | Tool | Source on disk |
 |------|----------------|
 | Claude Code | `~/.claude/projects/**/*.jsonl` |
-| Cursor | `~/.cursor/projects/` |
+| Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS; `%APPDATA%\Cursor\User\globalStorage\state.vscdb` on Windows; `~/.config/Cursor/User/globalStorage/state.vscdb` on Linux |
 | Codex | `~/.codex/sessions/` |
 | OpenClaw | `~/.openclaw/agents/` |
 | Hermes | `~/.hermes/state.db` |
-| GitHub Copilot | 🚧 [Contributions welcome](#contributing) |
+| GitHub Copilot | VS Code-compatible `User/workspaceStorage/*/chatSessions/` and `User/globalStorage/emptyWindowChatSessions/` under Code, Code - Insiders, VSCodium, or Cursor |
 
 ---
 
@@ -165,7 +165,6 @@ Filter logic, transcript packing, and prompt are all open and inspectable under 
 
 ## Roadmap
 
-- [ ] GitHub Copilot reader
 - [ ] Full-text search across sessions
 - [ ] Cross-repo knowledge linking (problem solved in repo A → surfaced in repo B)
 - [ ] Tag / favorite sessions
