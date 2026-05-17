@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+﻿import Fastify from 'fastify';
 import staticPlugin from '@fastify/static';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -24,7 +24,7 @@ interface WebServerOptions {
   isDev?: boolean;
 }
 
-export async function startWebServer({ port = 3847, isDev = false }: WebServerOptions = {}): Promise<void> {
+export async function startWebServer({ port = readApiPortEnv() ?? 3847, isDev = false }: WebServerOptions = {}): Promise<void> {
   if (!isDev && !fs.existsSync(WEB_DIST)) {
     throw new Error(`Web UI not found at ${WEB_DIST}. Run "npm run build" first, or use "npm run dev" for development.`);
   }
@@ -124,7 +124,7 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
       knowledge: { ...current.knowledge, ...body.knowledge },
     };
     await saveConfig(updated);
-    // Re-seed the watcher when the watched-repo set changes — adding a fresh
+    // Re-seed the watcher when the watched-repo set changes; adding a fresh
     // repo via the wizard while the viewer is already running should "just
     // work" without needing a restart.
     const before = current.knowledge.watchedRepos ?? [];
@@ -136,7 +136,7 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     return updated;
   });
 
-  // Recent runs endpoint — powers the "auto-learn activity" pane in the UI
+  // Recent runs endpoint: powers the "auto-learn activity" pane in the UI
   // and answers "did the watcher actually fire?" without grepping the log file.
   app.get('/api/learn-runs', async (req) => {
     const query = req.query as Record<string, string>;
@@ -147,7 +147,7 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
 
   // Per-commit knowledge note (the LLM-produced summary). The CommitView
   // pulls this when the user opens a commit, and a 404 here is the normal
-  // pre-learn state — the UI just shows an empty hint in that case.
+  // pre-learn state; the UI just shows an empty hint in that case.
   app.get('/api/commit-knowledge', async (req, reply) => {
     const query = req.query as Record<string, string>;
     const sha = (query['sha'] ?? '').trim();
@@ -226,16 +226,54 @@ export async function startWebServer({ port = 3847, isDev = false }: WebServerOp
     // Publish the resolved port so vite.config.ts can proxy correctly even
     // when the default 3847 is taken and we fall back to 3848/3849/...
     try {
-      const portFile = path.join(__dirname, '..', '..', 'node_modules', '.cache', 'agent-history-port');
+      const portFile = process.env['AGENT_HISTORY_PORT_FILE'] ??
+        path.join(__dirname, '..', '..', 'node_modules', '.cache', 'agent-history-port');
       await fs.promises.mkdir(path.dirname(portFile), { recursive: true });
       await fs.promises.writeFile(portFile, String(actualPort), 'utf-8');
     } catch { /* non-fatal */ }
-    console.log(`[api] http://localhost:${actualPort} (proxied via Vite → http://localhost:5173)`);
+    const webPort = process.env['AGENT_HISTORY_WEB_PORT'] || '5173';
+    console.log(`[api] http://localhost:${actualPort} (proxied via Vite -> http://localhost:${webPort})`);
   } else {
     const url = `http://localhost:${actualPort}`;
     console.log(`agent-history running at ${url}`);
     await open(url);
   }
+}
+
+function readApiPortEnv(): number | undefined {
+  const raw = process.env['AGENT_HISTORY_API_PORT'];
+  if (!raw) return undefined;
+  const port = Number(raw);
+  return Number.isInteger(port) && port > 0 ? port : undefined;
+}
+
+function getCommitScanSessions(): Promise<Awaited<ReturnType<AgentHistoryService['getSessions']>>> {
+  return service.getSessions({
+    maxSessions: COMMIT_SESSION_SCAN_LIMIT,
+    maxTurnsPerSession: 100,
+    maxCharsPerField: 100_000,
+  });
+}
+
+async function ensureCurrentRepoTargeted(): Promise<void> {
+  try {
+    const repoRoot = await findGitRoot(process.cwd());
+    if (!repoRoot) return;
+    const config = await loadConfig();
+    const watched = config.knowledge.watchedRepos ?? [];
+    const ignored = config.knowledge.ignoredRepos ?? [];
+    if (ignored.some((repo) => samePath(repo, repoRoot))) return;
+    if (watched.some((repo) => samePath(repo, repoRoot))) return;
+    config.knowledge.watchedRepos = [...watched, repoRoot];
+    await saveConfig(config);
+  } catch {
+    // The viewer can be opened outside a git repo; in that case there is no
+    // current repo to add as a default memory target.
+  }
+}
+
+function samePath(a: string, b: string): boolean {
+  return path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
 }
 
 function sameStringList(a: string[], b: string[]): boolean {
@@ -329,3 +367,4 @@ async function listenWithFallback(
   }
   throw new Error(`No available port found in range ${startPort}-${startPort + maxRetries - 1}`);
 }
+

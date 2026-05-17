@@ -7,7 +7,7 @@ import { runLearn } from './knowledge/index.js';
 import { showPrompt } from './setup/show-prompt.js';
 
 const args = process.argv.slice(2);
-// Treat a leading flag (`--dev`, `--mcp`, `--help`) as "no subcommand" — the
+// Treat a leading flag (`--dev`, `--mcp`, `--help`) as "no subcommand" - the
 // flag itself is consumed below. Without this, invocations like
 // `tsx watch src/cli.ts --dev` would land in the `default:` arm and exit 1
 // with "Unknown command: --dev".
@@ -75,10 +75,10 @@ async function main(): Promise<void> {
         return;
       }
       // Bare `contextberg` (no subcommand, no help flag) launches the
-      // browser viewer. This is the default "open it up" command — symmetric
+      // browser viewer. This is the default "open it up" command - symmetric
       // with `agent-history` so users only need to remember one binary name.
       printBanner();
-      await startWebServer({ isDev });
+      await startWebServer(buildWebServerOptions());
       break;
 
     default:
@@ -92,8 +92,20 @@ async function main(): Promise<void> {
   }
 }
 
+function readPortEnv(): number | undefined {
+  const raw = process.env['AGENT_HISTORY_API_PORT'];
+  if (!raw) return undefined;
+  const port = Number(raw);
+  return Number.isInteger(port) && port > 0 ? port : undefined;
+}
+
+function buildWebServerOptions(): { isDev: boolean; port?: number } {
+  const port = readPortEnv();
+  return port === undefined ? { isDev } : { isDev, port };
+}
+
 function printHelp(): void {
-  console.log(`contextberg — AI agent history viewer + cross-agent dreaming
+  console.log(`contextberg - AI agent history viewer + cross-agent dreaming
 
 Usage:
   contextberg                    Launch the browser viewer (default action)

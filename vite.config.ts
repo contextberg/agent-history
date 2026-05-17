@@ -7,8 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT_FILE = path.join(__dirname, 'node_modules', '.cache', 'agent-history-port');
-const PORT_FALLBACK = 3847;
+const PORT_FILE = process.env.AGENT_HISTORY_PORT_FILE ??
+  path.join(__dirname, 'node_modules', '.cache', 'agent-history-port');
+const PORT_FALLBACK = Number(process.env.AGENT_HISTORY_API_PORT) || 3847;
+const WEB_PORT = Number(process.env.AGENT_HISTORY_WEB_PORT) || 5173;
 
 /**
  * Read the API port the dev server is currently bound to. We re-read on every
@@ -69,6 +71,10 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'dist/web'),
     emptyOutDir: true,
+  },
+  server: {
+    port: WEB_PORT,
+    strictPort: Boolean(process.env.AGENT_HISTORY_WEB_PORT),
   },
   resolve: {
     alias: { '@': path.resolve(__dirname, 'src/web/src') },
