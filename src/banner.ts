@@ -1,10 +1,5 @@
 const ART = String.raw`
- ██████╗ ██████╗ ███╗   ██╗████████╗███████╗██╗  ██╗████████╗██████╗ ███████╗██████╗  ██████╗
-██╔════╝██╔═══██╗████╗  ██║╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗██╔════╝
-██║     ██║   ██║██╔██╗ ██║   ██║   █████╗   ╚███╔╝    ██║   ██████╔╝█████╗  ██████╔╝██║  ███╗
-██║     ██║   ██║██║╚██╗██║   ██║   ██╔══╝   ██╔██╗    ██║   ██╔══██╗██╔══╝  ██╔══██╗██║   ██║
-╚██████╗╚██████╔╝██║ ╚████║   ██║   ███████╗██╔╝ ██╗   ██║   ██████╔╝███████╗██║  ██║╚██████╔╝
- ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝
+Contextberg agent-history
 `;
 
 export function printBanner(): void {
@@ -13,5 +8,5 @@ export function printBanner(): void {
   const dim = useColor ? '\x1b[2m' : '';
   const reset = useColor ? '\x1b[0m' : '';
   process.stdout.write(`${cyan}${ART}${reset}\n`);
-  process.stdout.write(`${dim}  Browse AI coding agent transcripts — https://contextberg.com${reset}\n\n`);
+  process.stdout.write(`${dim}  Browse AI coding agent transcripts - https://contextberg.com${reset}\n\n`);
 }

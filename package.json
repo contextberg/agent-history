@@ -1,6 +1,6 @@
 {
   "name": "@contextberg/agent-history",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Browse and copy AI coding agent transcripts from Claude Code, Cursor, OpenClaw and more",
   "license": "MIT",
   "author": "Contextberg",
@@ -8,6 +8,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/contextberg/agent-history.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "ai",
@@ -30,9 +33,12 @@
     "dev": "concurrently -k -n api,web -c bgBlue.bold,bgGreen.bold \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "tsx watch src/cli.ts --dev",
     "dev:web": "vite --open",
-    "build": "npm run build:web && npm run build:server",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && npm run build:web && npm run build:server",
     "build:web": "vite build",
     "build:server": "tsup",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"
