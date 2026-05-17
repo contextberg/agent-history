@@ -164,10 +164,7 @@ export function CommitView({ commit, sessions, onSelectSession }: Props) {
             </div>
           </div>
         ) : (
-          <p style={emptyHintStyle}>
-            No knowledge note yet. Background extraction will run on the next commit
-            in this repo, or run <code style={inlineCodeStyle}>contextberg learn --commit {commit.sha.slice(0, 7)}</code> to backfill.
-          </p>
+          <KnowledgeEmptyState commit={commit} />
         )}
       </Section>
 
@@ -229,6 +226,57 @@ export function CommitView({ commit, sessions, onSelectSession }: Props) {
   );
 }
 
+function KnowledgeEmptyState({ commit }: { commit: CommitWithLinks }) {
+  const run = commit.learnRun;
+  if (run?.status === 'no-auth') {
+    const provider = run.provider ? ` for ${run.provider}` : '';
+    return (
+      <div style={noticeStyle}>
+        <p style={noticeTitleStyle}>Knowledge extraction needs credentials{provider}.</p>
+        <p style={emptyHintStyle}>
+          Run <code style={inlineCodeStyle}>contextberg setup</code> to save credentials, then run{' '}
+          <code style={inlineCodeStyle}>contextberg learn --commit {commit.sha.slice(0, 7)}</code> to backfill this commit.
+        </p>
+      </div>
+    );
+  }
+
+  if (run?.status === 'error') {
+    return (
+      <div style={noticeStyle}>
+        <p style={noticeTitleStyle}>Knowledge extraction failed.</p>
+        <p style={emptyHintStyle}>
+          {run.reason ?? 'Check contextberg status for details.'} Run{' '}
+          <code style={inlineCodeStyle}>contextberg learn --commit {commit.sha.slice(0, 7)} --verbose</code> to retry.
+        </p>
+      </div>
+    );
+  }
+
+  if (run?.status === 'no-sessions') {
+    return (
+      <p style={emptyHintStyle}>
+        No knowledge note was created because no linked session transcript could be used for extraction.
+      </p>
+    );
+  }
+
+  if (run?.status === 'skip' || run?.status === 'empty') {
+    return (
+      <p style={emptyHintStyle}>
+        No knowledge note was created for this commit{run.reason ? `: ${run.reason}` : '.'}
+      </p>
+    );
+  }
+
+  return (
+    <p style={emptyHintStyle}>
+      No knowledge note yet. Background extraction will run on the next commit
+      in this repo, or run <code style={inlineCodeStyle}>contextberg learn --commit {commit.sha.slice(0, 7)}</code> to backfill.
+    </p>
+  );
+}
+
 const emptyHintStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 12,
@@ -260,6 +308,20 @@ const knowledgeBodyStyle: React.CSSProperties = {
   borderRadius: 10,
   border: '1px solid var(--border-main)',
   backgroundColor: 'var(--bg-card)',
+};
+
+const noticeStyle: React.CSSProperties = {
+  padding: '12px 14px',
+  borderRadius: 8,
+  border: '1px solid var(--border-main)',
+  backgroundColor: 'var(--bg-card)',
+};
+
+const noticeTitleStyle: React.CSSProperties = {
+  margin: '0 0 6px',
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: 'var(--text-primary)',
 };
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

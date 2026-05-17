@@ -10,7 +10,7 @@ import { loadConfig, saveConfig } from '../config.js';
 import type { AgentHistoryConfig } from '../config.js';
 import { aggregateCommits } from './commits.js';
 import { readAllLinkCaches } from '../knowledge/link-cache.js';
-import { readRecentRuns } from '../knowledge/run-log.js';
+import { readRecentRuns, type RunLogEntry } from '../knowledge/run-log.js';
 import { findCommitKnowledge } from '../knowledge/store.js';
 import { CommitWatcher, type WatcherEvent } from './commit-watcher.js';
 
@@ -58,11 +58,11 @@ export async function startWebServer({ port = readApiPortEnv() ?? 3847, isDev = 
         const cachedCommits = rehydrateCachedLinks(caches.flatMap((c) => c.commits), sessions);
         const all = [...cachedCommits, ...liveCommits];
         all.sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
-        return { commits: all };
+        return { commits: await attachLearnRuns(all) };
       }
 
       const sessions = await service.getSessions();
-      return { commits: await aggregateCommits(sessions) };
+      return { commits: await attachLearnRuns(await aggregateCommits(sessions)) };
     })();
     try {
       const value = await commitsInFlight;
@@ -245,6 +245,39 @@ function readApiPortEnv(): number | undefined {
   if (!raw) return undefined;
   const port = Number(raw);
   return Number.isInteger(port) && port > 0 ? port : undefined;
+}
+
+async function attachLearnRuns(
+  commits: Awaited<ReturnType<typeof aggregateCommits>>,
+): Promise<Awaited<ReturnType<typeof aggregateCommits>>> {
+  const runs = await readRecentRuns(500);
+  if (runs.length === 0) return commits;
+
+  const latestByCommit = new Map<string, RunLogEntry>();
+  for (const run of runs) {
+    if (!run.sha) continue;
+    const key = learnRunKey(run.repo, run.sha);
+    const prev = latestByCommit.get(key);
+    if (!prev || Date.parse(run.ts) > Date.parse(prev.ts)) latestByCommit.set(key, run);
+  }
+
+  for (const commit of commits) {
+    const run = latestByCommit.get(learnRunKey(commit.repo, commit.sha));
+    if (!run) continue;
+    const learnRun = {
+      ts: run.ts,
+      status: run.status,
+      ...(run.reason ? { reason: run.reason } : {}),
+      ...(run.provider ? { provider: run.provider } : {}),
+      ...(run.model ? { model: run.model } : {}),
+    };
+    commit.learnRun = learnRun;
+  }
+  return commits;
+}
+
+function learnRunKey(repo: string, sha: string): string {
+  return `${path.resolve(repo).toLowerCase()}\0${sha.toLowerCase()}`;
 }
 
 function sameStringList(a: string[], b: string[]): boolean {

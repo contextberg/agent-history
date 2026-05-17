@@ -36,6 +36,14 @@ export interface CommitWithLinks {
   files: string[];
   /** Sessions that scored above the threshold, sorted by score descending. */
   links: SessionCommitLink[];
+  /** Latest knowledge extraction run recorded for this commit, if any. */
+  learnRun?: {
+    ts: string;
+    status: 'ok' | 'skip' | 'no-sessions' | 'no-auth' | 'empty' | 'error';
+    reason?: string;
+    provider?: string;
+    model?: string;
+  };
 }
 
 /**

@@ -61,6 +61,13 @@ export interface CommitWithLinks {
   subject: string;
   files: string[];
   links: CommitLink[];
+  learnRun?: {
+    ts: string;
+    status: 'ok' | 'skip' | 'no-sessions' | 'no-auth' | 'empty' | 'error';
+    reason?: string;
+    provider?: string;
+    model?: string;
+  };
 }
 
 export interface CommitKnowledge {
