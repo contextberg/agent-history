@@ -292,7 +292,7 @@ function SessionHeader({ session }: { session: AgentSession }) {
             color: hex,
             border: '1px solid ' + hex + '30',
           }}>
-            <span style={{ width: 5, height: 5, borderRadius: 999, backgroundColor: hex }} />
+            <SourceIcon source={session.source} size={12} />
             {sourceLabel(session.source)}
           </span>
           <span style={{ fontSize: 14, color: 'var(--text-tertiary)' }}>/</span>
