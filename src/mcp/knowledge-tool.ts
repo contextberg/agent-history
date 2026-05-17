@@ -5,9 +5,9 @@ import { globalKnowledgeDir } from '../knowledge/store.js';
 
 /**
  * MCP-side reader for per-commit knowledge entries written by `contextberg learn`.
- * Reads from `~/.agent-history/knowledge/<repo>/commits/YYYY-MM/{sha}-{slug}.json`
- * (the global mirror) so other AI agents in unrelated cwds can pull this repo's
- * accumulated decisions.
+ * Reads from the global mirror under `~/.agent-history/knowledge/<repo>/`.
+ * The on-disk layout matches `.contextberg/knowledge/` in each watched repo,
+ * so other AI agents in unrelated cwd values can pull accumulated decisions.
  */
 
 export const GetCommitKnowledgeSchema = z.object({
@@ -16,10 +16,10 @@ export const GetCommitKnowledgeSchema = z.object({
     .describe('Filter by repo basename (e.g. "agent-history"). Omit to scan all repos.'),
   since: z.string()
     .optional()
-    .describe('ISO date — return only commits extracted on or after this date.'),
+    .describe('ISO date; return only commits extracted on or after this date.'),
   until: z.string()
     .optional()
-    .describe('ISO date — return only commits extracted on or before this date.'),
+    .describe('ISO date; return only commits extracted on or before this date.'),
   query: z.string()
     .optional()
     .describe('Substring filter (case-insensitive) over subject and body.'),
@@ -33,7 +33,7 @@ export const GetCommitKnowledgeSchema = z.object({
 
 export type GetCommitKnowledgeInput = z.infer<typeof GetCommitKnowledgeSchema>;
 
-interface StoredEntry {
+export interface StoredEntry {
   sha: string;
   subject: string;
   repo: string;
@@ -99,7 +99,7 @@ export async function readCommitKnowledge(
   const limit = Math.min(params.limit ?? 10, 20);
   const cap = Math.min(params.maxCharsPerEntry ?? 1500, 2000);
 
-  // Narrow to a single repo dir if filter says so — saves a lot of I/O when
+  // Narrow to a single repo dir if filter says so; saves a lot of I/O when
   // the global cache holds many repos.
   const scanRoot = params.repo ? path.join(root, params.repo) : root;
   const files = await listJsonFilesUnder(scanRoot);
@@ -125,7 +125,7 @@ export function formatEntriesAsMarkdown(entries: StoredEntry[]): string {
     const sha7 = e.sha.slice(0, 7);
     const date = (e.authoredAt || e.extractedAt).slice(0, 10);
     lines.push(`### \`${sha7}\` ${e.subject}`);
-    lines.push(`*${e.repoName}/${e.branch || 'unknown'} · ${date} · ${e.provider}/${e.model} · ${e.sessions.length} session(s)*`);
+    lines.push(`*${e.repoName}/${e.branch || 'unknown'} | ${date} | ${e.provider}/${e.model} | ${e.sessions.length} session(s)*`);
     lines.push('');
     lines.push(e.body.trim());
     lines.push('');

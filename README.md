@@ -34,6 +34,17 @@ You can also launch the viewer once with:
 npx @contextberg/agent-history
 ```
 
+Requirements:
+
+- Node.js 22.5 or newer.
+- macOS, Linux, and Windows are supported.
+- On macOS, Cursor and VS Code/Copilot history is read from
+  `~/Library/Application Support/...`; no extra setup is required beyond the
+  normal app installation.
+- Some macOS GUI MCP clients do not inherit your shell `PATH`. If an MCP client
+  cannot find `contextberg`, use the absolute path printed by
+  `which contextberg` in that client's MCP config.
+
 ## Quick Start
 
 Launch the viewer:
@@ -108,11 +119,134 @@ Add the built package to any MCP client as a stdio server:
 
 Available tools:
 
-- `get_agent_history`: returns bounded prior sessions and turns.
+- `get_agent_history`: returns bounded prior sessions and turns, with recent
+  learned commit notes included by default.
 - `get_commit_knowledge`: returns learned per-commit notes.
 
 Tool outputs are capped by default so they can safely fit into another agent's
 context window. Caps are configurable in the web settings and MCP arguments.
+
+Set `includeCommitKnowledge: false` on `get_agent_history` when you only want
+raw conversation history. Use `get_commit_knowledge` directly when you want to
+search learned notes by repo, date, or query.
+
+### MCP Data Formats
+
+#### `get_agent_history`
+
+Input:
+
+```ts
+{
+  source?: 'claude-code' | 'cursor' | 'openclaw' | 'codex' | 'hermes' | 'copilot';
+  date?: string;                 // ISO date, e.g. "2026-05-18"
+  maxSessions?: number;
+  maxTurnsPerSession?: number;
+  maxCharsPerField?: number;
+  includeToolCalls?: boolean;     // default: true
+  includeToolOutputs?: boolean;   // default: false
+  includeCommitKnowledge?: boolean; // default: true
+  response_format?: 'markdown' | 'json'; // default: markdown
+}
+```
+
+Default markdown output:
+
+```md
+## Recent Learned Commit Knowledge
+
+### `abc1234` feat(viewer): improve commit memory workflow
+*agent-history/main | 2026-05-18 | codex/gpt-5.5 | 3 session(s)*
+
+## What was done
+- ...
+
+---
+
+### [codex] agent-history | 2026-05-18T10:00:00.000Z | cwd:/repo
+
+**[Turn 1] User:**
+
+...
+
+**Assistant:**
+
+...
+
+*Tools used: `shell_command`, `apply_patch`*
+```
+
+JSON output (`response_format: "json"`):
+
+```ts
+{
+  sessions: Array<{
+    source: 'claude-code' | 'cursor' | 'openclaw' | 'codex' | 'hermes' | 'copilot';
+    project: string;
+    startedAt: string;
+    endedAt?: string;
+    cwd?: string;
+    gitBranch?: string;
+    turns: Array<{
+      userMessage: string;
+      assistantText: string;
+      tools?: Array<{
+        name: string;
+        output?: string; // present only when includeToolOutputs=true
+      }>;
+    }>;
+  }>;
+  commitKnowledge: Array<{
+    sha: string;
+    subject: string;
+    repo: string;
+    repoName: string;
+    branch: string;
+    authorName: string;
+    authoredAt: string;
+    extractedAt: string;
+    provider: string;
+    model: string;
+    body: string;
+    sessions: Array<{ id: string; score: number; reason: string }>;
+    filesChanged: string[];
+    inputChars: number;
+    outputChars: number;
+    durationMs: number;
+  }>;
+}
+```
+
+#### `get_commit_knowledge`
+
+Input:
+
+```ts
+{
+  repo?: string;              // repo basename, e.g. "agent-history"
+  since?: string;             // ISO date lower bound on extractedAt
+  until?: string;             // ISO date upper bound on extractedAt
+  query?: string;             // case-insensitive subject/body substring
+  limit?: number;             // default 10, max 20
+  maxCharsPerEntry?: number;  // default 1500, max 2000
+}
+```
+
+Output is markdown:
+
+```md
+### `abc1234` feat(viewer): improve commit memory workflow
+*agent-history/main | 2026-05-18 | codex/gpt-5.5 | 3 session(s)*
+
+## What was done
+- ...
+
+## Where it got stuck
+- ...
+
+## Open
+- ...
+```
 
 ## Knowledge Storage
 

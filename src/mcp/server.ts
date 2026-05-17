@@ -35,6 +35,9 @@ const GetAgentHistorySchema = z.object({
   includeToolOutputs: z.boolean()
     .optional()
     .describe('Include tool result output wrapped in code fences. Off by default; enabling increases payload size significantly.'),
+  includeCommitKnowledge: z.boolean()
+    .optional()
+    .describe('Append recent learned commit notes from contextberg learn. Default: true.'),
   response_format: z.enum(['markdown', 'json'])
     .optional()
     .describe('Output format. "markdown" (default): human-readable with code blocks preserved. "json": structured data for programmatic processing.'),
@@ -53,8 +56,8 @@ export async function startMcpServer(): Promise<void> {
       title: 'Get Agent History',
       description:
         'Retrieve prior coding-agent session history to continue work or hand off context to another agent or application. ' +
-        'Returns full conversation turns — user requests, assistant replies with code blocks preserved, ' +
-        'and optional tool-call traces — from Claude Code, Cursor, Codex, and other local sources. ' +
+        'Returns full conversation turns - user requests, assistant replies with code blocks preserved, ' +
+        'optional tool-call traces, and recent learned commit notes - from Claude Code, Cursor, Codex, and other local sources. ' +
         'Use this to resume an interrupted task, understand what was already built, ' +
         "or load a previous session's context into a new agent so work can continue seamlessly. " +
         `Defaults: maxSessions=${CONFIG_DEFAULTS.mcp.maxSessions}, ` +
@@ -77,6 +80,7 @@ export async function startMcpServer(): Promise<void> {
       const maxCharsPerField = params.maxCharsPerField ?? d.maxCharsPerField;
       const includeToolCalls = params.includeToolCalls ?? d.includeToolCalls;
       const includeToolOutputs = params.includeToolOutputs ?? d.includeToolOutputs;
+      const includeCommitKnowledge = params.includeCommitKnowledge ?? true;
       const responseFormat = params.response_format ?? 'markdown';
 
       try {
@@ -100,6 +104,12 @@ export async function startMcpServer(): Promise<void> {
         }
 
         if (responseFormat === 'json') {
+          const commitKnowledge = includeCommitKnowledge
+            ? await readCommitKnowledge({
+                limit: Math.min(maxSessions, 5),
+                maxCharsPerEntry: maxCharsPerField,
+              })
+            : [];
           const data = sessions.map((session) => ({
             source: session.source,
             project: session.project,
@@ -133,14 +143,29 @@ export async function startMcpServer(): Promise<void> {
               };
             }),
           }));
-          const text = JSON.stringify(data, null, 2);
+          const text = JSON.stringify({ sessions: data, commitKnowledge }, null, 2);
           return {
             content: [{ type: 'text', text }],
-            structuredContent: { sessions: data },
+            structuredContent: { sessions: data, commitKnowledge },
           };
         }
 
         const lines: string[] = [];
+        if (includeCommitKnowledge) {
+          const entries = await readCommitKnowledge({
+            limit: Math.min(maxSessions, 5),
+            maxCharsPerEntry: maxCharsPerField,
+          });
+          if (entries.length > 0) {
+            lines.push('## Recent Learned Commit Knowledge');
+            lines.push('');
+            lines.push(formatEntriesAsMarkdown(entries));
+            lines.push('');
+            lines.push('---');
+            lines.push('');
+          }
+        }
+
         for (const session of sessions) {
           const headerParts = [`[${session.source}]`, session.project, session.startedAt.toISOString()];
           if (session.cwd) headerParts.push(`cwd:${session.cwd}`);
@@ -211,7 +236,7 @@ export async function startMcpServer(): Promise<void> {
         '(bugs hit, dead ends ruled out, surprising behavior, judgement-call decisions). ' +
         'Use this to recall how a similar problem was tackled before, what gotchas were uncovered, ' +
         'or to brief a fresh agent on a repo it has not seen. ' +
-        'Reads from ~/.agent-history/knowledge/<repo>/commits/ written by `contextberg learn`. ' +
+        'Reads from the global mirror under ~/.agent-history/knowledge/<repo>/ written by `contextberg learn`. ' +
         'Defaults: limit=10 (cap 20), maxCharsPerEntry=1500 (cap 2000).',
       inputSchema: GetCommitKnowledgeSchema,
       annotations: {
