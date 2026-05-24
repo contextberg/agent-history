@@ -5,13 +5,13 @@ import { loadConfig } from '../config.js';
 import { AgentHistoryService } from '../readers/index.js';
 import { aggregateCommits } from '../server/commits.js';
 import type { AgentSession } from '../readers/types.js';
-import { DEFAULT_SYSTEM_PROMPT } from './extractor.js';
 import { storeKnowledge } from './store.js';
 import { writeLinkCache } from './link-cache.js';
 import { buildPrompt } from './transcripts.js';
 import { callProvider, findModel, getProfile, resolveAuth } from './providers/index.js';
 import { inspectCommit, filterDiff } from './commit-filter.js';
 import { appendRunLog, type RunStatus } from './run-log.js';
+import { resolvePrompt } from '../setup/prompt-file.js';
 
 const execFileAsync = promisify(execFile);
 const KNOWLEDGE_SESSION_SCAN_LIMIT = 1000;
@@ -313,12 +313,13 @@ export async function runLearn(opts: LearnOptions = {}): Promise<LearnRunResult>
 
   log(`Calling ${profile.displayName} (${model.id})…`, verbose);
   const startedAt = Date.now();
+  const resolvedPrompt = await resolvePrompt(config);
   let result;
   try {
     result = await callProvider({
       profile,
       model,
-      systemPrompt: k.prompt ?? DEFAULT_SYSTEM_PROMPT,
+      systemPrompt: resolvedPrompt.prompt,
       userContent,
       auth,
       maxTokens: k.maxOutputTokens ?? 100_000,

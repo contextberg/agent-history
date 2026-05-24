@@ -17,6 +17,7 @@ export interface AppSettings {
     provider: string;
     model: string;
     outputDir: string;
+    prompt?: string;
     watchedRepos: string[];
     ignoredRepos: string[];
   };

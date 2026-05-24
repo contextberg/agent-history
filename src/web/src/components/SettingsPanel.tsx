@@ -14,8 +14,13 @@ interface Props {
 export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView, commitRepos }: Props) {
   const [repoStatus, setRepoStatus] = React.useState<RepoStatus | null>(null);
   const [repoInput, setRepoInput] = React.useState('');
+  const [defaultPrompt, setDefaultPrompt] = React.useState('');
+  const [savedPrompt, setSavedPrompt] = React.useState('');
+  const [promptDraft, setPromptDraft] = React.useState(settings.knowledge.prompt ?? '');
   const memoryTargets = settings.knowledge.watchedRepos ?? [];
   const ignoredTargets = settings.knowledge.ignoredRepos ?? [];
+  const activePrompt = savedPrompt || defaultPrompt;
+  const promptChanged = promptDraft !== activePrompt;
   const inputTarget = repoInput.trim();
   const inputAlreadyAdded = inputTarget
     ? memoryTargets.some((r) => samePath(r, inputTarget))
@@ -32,6 +37,26 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView, 
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch('/api/knowledge-prompt')
+      .then((r) => r.json())
+      .then((data: { prompt: string; defaultPrompt: string; custom: boolean }) => {
+        if (cancelled) return;
+        setDefaultPrompt(data.defaultPrompt);
+        setSavedPrompt(data.prompt);
+        setPromptDraft(data.prompt);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  React.useEffect(() => {
+    if (!settings.knowledge.prompt) return;
+    setSavedPrompt(settings.knowledge.prompt);
+    setPromptDraft(settings.knowledge.prompt);
+  }, [settings.knowledge.prompt]);
 
   React.useEffect(() => {
     const autoTargets = uniquePaths([
@@ -74,6 +99,27 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView, 
         ignoredRepos: uniquePaths([...ignoredTargets, target]),
       },
     });
+  }
+
+  function savePromptDraft() {
+    const nextKnowledge = { ...settings.knowledge };
+    const nextPrompt = promptDraft.trimEnd();
+    if (nextPrompt.trim().length > 0 && nextPrompt !== defaultPrompt.trimEnd()) {
+      nextKnowledge.prompt = nextPrompt;
+      setSavedPrompt(nextPrompt);
+    } else {
+      nextKnowledge.prompt = defaultPrompt;
+      setSavedPrompt(defaultPrompt);
+    }
+    onUpdate({ knowledge: nextKnowledge });
+  }
+
+  function resetPrompt() {
+    const nextKnowledge = { ...settings.knowledge };
+    nextKnowledge.prompt = defaultPrompt;
+    setPromptDraft(defaultPrompt);
+    setSavedPrompt(defaultPrompt);
+    onUpdate({ knowledge: nextKnowledge });
   }
 
   return (
@@ -165,6 +211,60 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView, 
         </div>
       </section>
 
+      <section className="settings-card">
+        <SectionTitle>Knowledge Prompt</SectionTitle>
+        <SectionHint>Customize how commit notes are written.</SectionHint>
+        <textarea
+          value={promptDraft}
+          onChange={(e) => setPromptDraft(e.target.value)}
+          placeholder="Loading prompt..."
+          spellCheck={false}
+          className="focus-ring w-full min-h-48 resize-y rounded-lg border px-3 py-2 font-mono text-[11px] leading-relaxed"
+          style={{
+            borderColor: 'var(--border-main)',
+            backgroundColor: 'var(--bg-inset)',
+            color: 'var(--text-primary)',
+          }}
+        />
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            {savedPrompt && savedPrompt !== defaultPrompt ? 'Custom prompt active' : 'Built-in prompt active'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={resetPrompt}
+              disabled={savedPrompt === defaultPrompt && promptDraft === defaultPrompt}
+              className="focus-ring rounded-lg border px-3 py-1.5 text-[12px] font-semibold"
+              style={{
+                borderColor: 'var(--border-main)',
+                backgroundColor: 'var(--bg-card)',
+                color: 'var(--text-secondary)',
+                cursor: savedPrompt !== defaultPrompt || promptDraft !== defaultPrompt ? 'pointer' : 'default',
+                opacity: savedPrompt !== defaultPrompt || promptDraft !== defaultPrompt ? 1 : 0.55,
+              }}
+            >
+              Use default
+            </button>
+            <button
+              type="button"
+              onClick={savePromptDraft}
+              disabled={!promptChanged}
+              className="focus-ring rounded-lg border px-3 py-1.5 text-[12px] font-semibold"
+              style={{
+                borderColor: promptChanged ? 'var(--accent)' : 'var(--border-main)',
+                backgroundColor: promptChanged ? 'var(--accent)' : 'var(--bg-card)',
+                color: promptChanged ? 'white' : 'var(--text-tertiary)',
+                cursor: promptChanged ? 'pointer' : 'default',
+                opacity: promptChanged ? 1 : 0.55,
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* MCP Output */}
       <section className="settings-card">
         <SectionTitle>MCP Output</SectionTitle>
@@ -205,13 +305,16 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView, 
       <section className="settings-card">
         <SectionTitle>Quick add</SectionTitle>
         <p className="m-0 mb-3 text-[11.5px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-          Add the MCP server from the CLI when your agent supports it, or install the companion skill when you want the usage pattern available inside the agent.
+          Add the agent-history MCP server from the CLI when your agent supports it.
         </p>
-        <CodeBlock label="Claude Code (Windows)">
-{`claude mcp add agent-history -- cmd /c "npx -y @contextberg/agent-history --mcp"`}
+        <CodeBlock label="Claude Code (Windows / WSL)">
+{`claude mcp add agent-history -- cmd.exe /c npx -y @contextberg/agent-history --mcp`}
         </CodeBlock>
-        <CodeBlock label="Codex">
-{`codex mcp add agent-history -- npx -y @contextberg/agent-history --mcp`}
+        <CodeBlock label="Codex (Windows / WSL)">
+{`codex mcp add agent-history -- cmd.exe /c npx -y @contextberg/agent-history --mcp`}
+        </CodeBlock>
+        <CodeBlock label="OpenClaw (Windows / WSL)">
+{`openclaw mcp set agent-history -- cmd.exe /c npx -y @contextberg/agent-history --mcp`}
         </CodeBlock>
         <CodeBlock label="Skill">
 {`npx skills add contextberg/agent-history --skill agent-history-cli`}
@@ -219,16 +322,18 @@ export function SettingsPanel({ settings, onUpdate, viewSettings, onUpdateView, 
       </section>
 
       <section className="settings-card">
-        <SectionTitle>MCP Config</SectionTitle>
+        <SectionTitle>Others / MCP Config</SectionTitle>
         <p className="m-0 mb-3 text-[11.5px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-          Cursor reads MCP configuration from <code className="font-mono text-[10.5px] px-[5px] py-px rounded" style={{ backgroundColor: 'var(--bg-inset)' }}>mcp.json</code>; the same JSON also works for clients that prefer direct config editing.
+          For clients that use <code className="font-mono text-[10.5px] px-[5px] py-px rounded" style={{ backgroundColor: 'var(--bg-inset)' }}>mcp.json</code>, use <code className="font-mono text-[10.5px] px-[5px] py-px rounded" style={{ backgroundColor: 'var(--bg-inset)' }}>cmd.exe</code> on Windows or WSL, and <code className="font-mono text-[10.5px] px-[5px] py-px rounded" style={{ backgroundColor: 'var(--bg-inset)' }}>npx</code> directly on macOS or Linux.
         </p>
         <pre className="font-mono m-0 text-[11px] p-3.5 rounded-xl whitespace-pre overflow-x-auto border" style={{ backgroundColor: 'var(--bg-inset)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
 {`{
   "mcpServers": {
     "agent-history": {
-      "command": "npx",
+      "command": "cmd.exe",
       "args": [
+        "/c",
+        "npx",
         "-y",
         "@contextberg/agent-history",
         "--mcp"

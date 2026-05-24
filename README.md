@@ -2,41 +2,27 @@
 
 Local-first memory for AI coding agents.
 
-`agent-history` reads local conversation history from Claude Code, Cursor,
-Codex, OpenClaw, Hermes, and GitHub Copilot, then links those sessions to git
-commits. It can also extract a short per-commit knowledge note so the next
-agent can recover why a change happened without asking you to repeat the story.
+`contextberg` reads local conversation history from Claude Code, Codex, Hermes,
+Cursor, OpenClaw, and GitHub Copilot, then links those sessions to git commits.
+It can also extract short per-commit knowledge notes so the next agent can
+recover why a change happened without asking you to repeat the story.
 
-The package installs two equivalent commands:
-
-- `contextberg`
-- `agent-history`
+![All agent sessions in one view](docs/demo.gif)
 
 ## What It Does
 
 | Feature | Description |
 | --- | --- |
-| Unified history viewer | Browse local sessions from multiple coding agents in one web UI. |
+| Unified history viewer | Browse local sessions from Claude Code, Codex, Hermes, Cursor, OpenClaw, and GitHub Copilot in one web UI. |
 | Commit linking | Group likely related sessions under recent git commits using repo, time, SHA references, and touched-file overlap. |
-| Commit knowledge | Run `contextberg learn` or keep the viewer open to produce per-commit notes under `.contextberg/knowledge/`. |
-| MCP handoff | Expose bounded history and learned commit notes through MCP tools for another agent. |
-| Local-first storage | Config and generated notes live under `~/.agent-history/` and the target repo. |
+| Commit knowledge | Turn each commit into a short "what changed and why" note using your chosen provider, either with your own API key or a Codex subscription. |
+| MCP handoff | Hand off the most recent active session's conversation history and learned commit notes to another agent through MCP. |
+| Local-first storage | Generated notes stay in the target repo and `~/.agent-history/`; transcript excerpts leave your machine only when commit knowledge runs, and only to the provider you configure. |
 
-## Install
-
-```bash
-npm install -g @contextberg/agent-history
-```
-
-You can also launch the viewer once with:
-
-```bash
-npx @contextberg/agent-history
-```
-
-Requirements:
+## Requirements
 
 - Node.js 22.5 or newer.
+- OpenClaw's MCP CLI requires Node.js 22.12 or newer.
 - macOS, Linux, and Windows are supported.
 - On macOS, Cursor and VS Code/Copilot history is read from
   `~/Library/Application Support/...`; no extra setup is required beyond the
@@ -45,47 +31,51 @@ Requirements:
   cannot find `contextberg`, use the absolute path printed by
   `which contextberg` in that client's MCP config.
 
-## Quick Start
+## Quick Setup
 
-Launch the viewer:
+Launch the viewer without installing anything globally:
 
 ```bash
-contextberg
+npx @contextberg/agent-history
 ```
 
-Set up commit knowledge for a repo:
+## Full Setup
+
+Install the command, then configure commit knowledge:
 
 ```bash
-cd /path/to/your/repo
+npm install -g @contextberg/agent-history
 contextberg setup
 ```
 
 The setup wizard configures:
 
 1. Provider and model
-2. Authentication
-3. Prompt/output limits
+2. Authentication with your own API key or a Codex subscription
+3. Input/output limits
 4. The current repo as a watched repo
 
 While the viewer is running, watched repos are monitored for new commits and
-knowledge extraction runs in the background. You can always backfill manually:
+knowledge extraction runs in the background.
+
+Launch the viewer any time with:
 
 ```bash
-contextberg learn --commit HEAD --verbose
+contextberg
 ```
+
+Use Settings in the viewer to edit the knowledge prompt or manage watched repos.
+The prompt is stored as `~/.agent-history/system-prompt.txt`, and you can edit
+that file directly with `contextberg edit-prompt`.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `contextberg` | Launch the web viewer and open a browser. |
-| `contextberg --dev` | Run the API server only, for local development. |
-| `contextberg --mcp` | Run the MCP stdio server. |
 | `contextberg setup` | Configure provider/model/auth and register the current repo. |
-| `contextberg learn --commit HEAD` | Extract knowledge for a commit. |
-| `contextberg status` | Show config, watched repos, auth status, and recent learn runs. |
-| `contextberg test` | Verify provider authentication with a small prompt. |
-| `contextberg show-prompt` | Print the active extraction prompt. |
+| `contextberg status` | Show config, watched repos, auth status, and recent knowledge extraction runs. |
+| `contextberg edit-prompt` | Open the knowledge prompt in your editor. |
 | `contextberg uninstall` | Stop watching the current repo and remove legacy hooks if present. |
 
 ## Supported History Sources
@@ -104,14 +94,48 @@ instead of taking down the viewer.
 
 ## MCP
 
-Add the built package to any MCP client as a stdio server:
+Add the agent-history MCP server to the agent you use:
+
+```bash
+claude mcp add agent-history -- cmd.exe /c npx -y @contextberg/agent-history --mcp
+```
+
+```bash
+codex mcp add agent-history -- cmd.exe /c npx -y @contextberg/agent-history --mcp
+```
+
+```bash
+openclaw mcp set agent-history -- cmd.exe /c npx -y @contextberg/agent-history --mcp
+```
+
+You can also install the companion skill so agents know how to use the
+agent-history MCP tools:
+
+```bash
+npx skills add contextberg/agent-history --skill agent-history-cli
+```
+
+For other clients that use `mcp.json`, add the same stdio server:
 
 ```json
 {
   "mcpServers": {
     "agent-history": {
-      "command": "contextberg",
-      "args": ["--mcp"]
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@contextberg/agent-history", "--mcp"]
+    }
+  }
+}
+```
+
+On macOS or Linux, use `npx` directly instead of `cmd.exe`:
+
+```json
+{
+  "mcpServers": {
+    "agent-history": {
+      "command": "npx",
+      "args": ["-y", "@contextberg/agent-history", "--mcp"]
     }
   }
 }
@@ -119,8 +143,9 @@ Add the built package to any MCP client as a stdio server:
 
 Available tools:
 
-- `get_agent_history`: returns bounded prior sessions and turns, with recent
-  learned commit notes included by default.
+- `get_agent_history`: returns bounded recent session history so another agent
+  can continue from the active conversation, with learned commit notes included
+  by default.
 - `get_commit_knowledge`: returns learned per-commit notes.
 
 Tool outputs are capped by default so they can safely fit into another agent's
@@ -156,14 +181,14 @@ Default markdown output:
 ## Recent Learned Commit Knowledge
 
 ### `abc1234` feat(viewer): improve commit memory workflow
-*agent-history/main | 2026-05-18 | codex/gpt-5.5 | 3 session(s)*
+*my-app/main | 2026-05-18 | codex/gpt-5.5 | 3 session(s)*
 
 ## What was done
 - ...
 
 ---
 
-### [codex] agent-history | 2026-05-18T10:00:00.000Z | cwd:/repo
+### [codex] my-app | 2026-05-18T10:00:00.000Z | cwd:/repo
 
 **[Turn 1] User:**
 
@@ -223,7 +248,7 @@ Input:
 
 ```ts
 {
-  repo?: string;              // repo basename, e.g. "agent-history"
+  repo?: string;              // repo basename, e.g. "my-app"
   since?: string;             // ISO date lower bound on extractedAt
   until?: string;             // ISO date upper bound on extractedAt
   query?: string;             // case-insensitive subject/body substring
@@ -236,7 +261,7 @@ Output is markdown:
 
 ```md
 ### `abc1234` feat(viewer): improve commit memory workflow
-*agent-history/main | 2026-05-18 | codex/gpt-5.5 | 3 session(s)*
+*my-app/main | 2026-05-18 | codex/gpt-5.5 | 3 session(s)*
 
 ## What was done
 - ...

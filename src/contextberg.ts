@@ -5,6 +5,7 @@ import { runSetup, runStatus, runUninstall } from './setup/index.js';
 import { runTest } from './setup/test-call.js';
 import { runLearn } from './knowledge/index.js';
 import { showPrompt } from './setup/show-prompt.js';
+import { editPrompt } from './setup/edit-prompt.js';
 
 const args = process.argv.slice(2);
 // Treat a leading flag (`--dev`, `--mcp`, `--help`) as "no subcommand"; the
@@ -64,6 +65,10 @@ async function main(): Promise<void> {
       await showPrompt();
       break;
 
+    case 'edit-prompt':
+      await editPrompt();
+      break;
+
     case 'uninstall':
       await runUninstall();
       break;
@@ -117,6 +122,7 @@ Usage:
   contextberg status             Show current configuration, watched repos, and recent runs
   contextberg test               Send a one-shot prompt to verify provider auth
   contextberg show-prompt        Print the system prompt the LLM will receive
+  contextberg edit-prompt        Open the knowledge extraction prompt in your editor
   contextberg uninstall          Stop watching this repo and remove legacy hooks
   contextberg --help             Show this help
 

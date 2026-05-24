@@ -12,6 +12,8 @@ import { aggregateCommits } from './commits.js';
 import { readAllLinkCaches } from '../knowledge/link-cache.js';
 import { readRecentRuns } from '../knowledge/run-log.js';
 import { findCommitKnowledge } from '../knowledge/store.js';
+import { DEFAULT_SYSTEM_PROMPT } from '../knowledge/extractor.js';
+import { resolvePrompt, writePromptFile } from '../setup/prompt-file.js';
 import { CommitWatcher, type WatcherEvent } from './commit-watcher.js';
 import { findGitRoot, getRepoStatus } from '../setup/repos.js';
 
@@ -122,6 +124,18 @@ export async function startWebServer({ port = readApiPortEnv() ?? 3847, isDev = 
     return loadConfig();
   });
 
+  app.get('/api/knowledge-prompt', async () => {
+    const config = await loadConfig();
+    const resolved = await resolvePrompt(config);
+    return {
+      prompt: resolved.prompt,
+      defaultPrompt: DEFAULT_SYSTEM_PROMPT,
+      custom: resolved.source !== 'default',
+      source: resolved.source,
+      path: resolved.path,
+    };
+  });
+
   app.get('/api/repo-status', async () => {
     return getRepoStatus();
   });
@@ -134,6 +148,10 @@ export async function startWebServer({ port = readApiPortEnv() ?? 3847, isDev = 
       mcp: { ...current.mcp, ...body.mcp },
       knowledge: { ...current.knowledge, ...body.knowledge },
     };
+    if (typeof body.knowledge?.prompt === 'string') {
+      await writePromptFile(body.knowledge.prompt);
+      delete updated.knowledge.prompt;
+    }
     await saveConfig(updated);
     // Re-seed the watcher when the watched-repo set changes — adding a fresh
     // repo via the wizard while the viewer is already running should "just
